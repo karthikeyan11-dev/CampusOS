@@ -4,6 +4,7 @@ const { pool } = require('../../config/database');
 const config = require('../../config/env');
 const { ROLES, USER_STATUS } = require('../../config/constants');
 const { sendApprovalEmail } = require('../../services/email.service');
+const { verifyIDCard } = require('../../services/ai.service');
 
 /**
  * Generate JWT tokens
@@ -33,7 +34,7 @@ const register = async (req, res, next) => {
       email, password, name, phone, role, departmentId,
       rollNumber, classId, batch, residenceType, hostelBlock, roomNumber,
       fatherName, fatherPhone, motherName, motherPhone,
-      facultyIdNumber, designation,
+      facultyIdNumber, designation, wardenId, hostelId,
     } = req.body;
 
     // Check if email already exists
@@ -46,7 +47,7 @@ const register = async (req, res, next) => {
     if (role === ROLES.STUDENT && rollNumber) {
       const existingRoll = await pool.query('SELECT id FROM students WHERE roll_number = $1', [rollNumber]);
       if (existingRoll.rows.length > 0) {
-        return res.status(409).json({ success: false, message: 'Roll number already registered.' });
+        return res.status(409).json({ success: false, message: 'Roll Number already registered.' });
       }
     }
 
@@ -80,12 +81,12 @@ const register = async (req, res, next) => {
     if (role === ROLES.STUDENT) {
       await pool.query(
         `INSERT INTO students (user_id, roll_number, class_id, batch, residence_type, hostel_block, room_number,
-         father_name, father_phone, mother_name, mother_phone)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+         father_name, father_phone, mother_name, mother_phone, warden_id, hostel_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
         [user.id, rollNumber, classId, batch, residenceType || 'day_scholar', hostelBlock, roomNumber,
-         fatherName, fatherPhone, motherName, motherPhone]
+         fatherName, fatherPhone, motherName, motherPhone, wardenId, hostelId]
       );
-    } else if (role === ROLES.FACULTY || role === ROLES.DEPARTMENT_ADMIN) {
+    } else if (role === ROLES.FACULTY || role === ROLES.DEPARTMENT_ADMIN || role === ROLES.WARDEN || role === ROLES.DEPUTY_WARDEN) {
       await pool.query(
         `INSERT INTO faculty (user_id, faculty_id_number, designation)
          VALUES ($1, $2, $3)`,
@@ -93,13 +94,38 @@ const register = async (req, res, next) => {
       );
     }
 
-    // Handle file uploads (ID card)
+    // Handle file uploads (ID card) & AI Verification
     if (req.file) {
       const idCardUrl = `/uploads/id-cards/${req.file.filename}`;
+      
+      // Update DB with URL first
       if (role === ROLES.STUDENT) {
         await pool.query('UPDATE students SET id_card_url = $1 WHERE user_id = $2', [idCardUrl, user.id]);
-      } else if (role === ROLES.FACULTY || role === ROLES.DEPARTMENT_ADMIN) {
+      } else {
         await pool.query('UPDATE faculty SET id_card_url = $1 WHERE user_id = $2', [idCardUrl, user.id]);
+      }
+
+      // AI ID Verification (Phase 3)
+      const fullUrl = `${req.protocol}://${req.get('host')}${idCardUrl}`;
+      const aiData = await verifyIDCard(fullUrl);
+      
+      if (aiData) {
+        // Name check (fuzzy)
+        const nameMatch = aiData.name && aiData.name.toLowerCase().includes(name.toLowerCase().split(' ')[0]);
+        // Roll number check for students
+        const rollMatch = role !== ROLES.STUDENT || (aiData.rollNumber && aiData.rollNumber.includes(rollNumber));
+
+        if (!nameMatch || !rollMatch) {
+          // Log violation but maybe allow for manual review? 
+          // Prompt says: "If mismatch occurs: Return verification failure."
+          // So we should probably delete the created user and return error.
+          await pool.query('DELETE FROM users WHERE id = $1', [user.id]);
+          return res.status(400).json({ 
+            success: false, 
+            message: 'ID card verification failed. Extracted details do not match form input.',
+            extracted: aiData 
+          });
+        }
       }
     }
 
@@ -175,7 +201,7 @@ const login = async (req, res, next) => {
         [user.id]
       );
       if (studentResult.rows.length > 0) roleData = studentResult.rows[0];
-    } else if (user.role === ROLES.FACULTY || user.role === ROLES.DEPARTMENT_ADMIN) {
+    } else if ([ROLES.FACULTY, ROLES.DEPARTMENT_ADMIN, ROLES.WARDEN, ROLES.DEPUTY_WARDEN].includes(user.role)) {
       const facultyResult = await pool.query(
         'SELECT * FROM faculty WHERE user_id = $1',
         [user.id]
@@ -289,7 +315,7 @@ const getProfile = async (req, res, next) => {
         [user.id]
       );
       if (r.rows.length > 0) roleData = { student: r.rows[0] };
-    } else if (user.role === ROLES.FACULTY || user.role === ROLES.DEPARTMENT_ADMIN) {
+    } else if ([ROLES.FACULTY, ROLES.DEPARTMENT_ADMIN, ROLES.WARDEN, ROLES.DEPUTY_WARDEN].includes(user.role)) {
       const r = await pool.query('SELECT * FROM faculty WHERE user_id = $1', [user.id]);
       if (r.rows.length > 0) roleData = { faculty: r.rows[0] };
     }
@@ -380,7 +406,7 @@ const getPendingUsers = async (req, res, next) => {
 
     // HOD/Faculty can only see students from their department
     if (req.user.role === ROLES.DEPARTMENT_ADMIN || req.user.role === ROLES.FACULTY) {
-      query += ' AND u.department_id = $1';
+      query += ` AND u.department_id = $1 AND u.role = '${ROLES.STUDENT}'`;
       params.push(req.user.departmentId);
     }
 

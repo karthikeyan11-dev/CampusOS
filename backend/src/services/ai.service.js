@@ -180,9 +180,58 @@ Return ONLY a JSON object: {"score": 0.XX}`,
   }
 };
 
+/**
+ * Verify ID card image using AI
+ * Extracts name, department, and roll number
+ */
+const verifyIDCard = async (imageUrl) => {
+  try {
+    const client = getGroqClient();
+    if (!client) return null;
+
+    const completion = await client.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [
+        {
+          role: 'system',
+          content: `You are an AI specialized in extracting information from ID cards. 
+Look at the text in the image and extract the following fields in JSON format:
+{
+  "name": "full name of the person",
+  "department": "department name",
+  "rollNumber": "roll number or ID number"
+}
+If a field is not found, use null. Return ONLY the JSON object.`,
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Extract information from this ID card image:' },
+            { type: 'image_url', image_url: { url: imageUrl } },
+          ],
+        },
+      ],
+      temperature: 0.1,
+      max_tokens: 200,
+    });
+
+    const responseText = completion.choices[0]?.message?.content || '';
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
+
+    return null;
+  } catch (error) {
+    console.error('AI ID Verification error:', error.message);
+    return null;
+  }
+};
+
 module.exports = {
   summarizeNotification,
   classifyComplaint,
   analyzeSentiment,
   assessItemSimilarity,
+  verifyIDCard,
 };

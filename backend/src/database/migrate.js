@@ -18,7 +18,8 @@ CREATE EXTENSION IF NOT EXISTS "btree_gist";
 DO $$ BEGIN
   CREATE TYPE user_role AS ENUM (
     'super_admin', 'department_admin', 'faculty', 
-    'student', 'security_staff', 'maintenance_staff'
+    'student', 'security_staff', 'maintenance_staff',
+    'warden', 'deputy_warden'
   );
 EXCEPTION WHEN duplicate_object THEN null;
 END $$;
@@ -71,8 +72,8 @@ END $$;
 
 DO $$ BEGIN
   CREATE TYPE gate_pass_status AS ENUM (
-    'pending_faculty', 'pending_hod', 'pending_super_admin',
-    'approved', 'rejected', 'active', 'expired', 'completed'
+    'pending_faculty', 'mentor_approved', 'hod_approved',
+    'warden_approved', 'approved', 'exited', 'expired', 'rejected'
   );
 EXCEPTION WHEN duplicate_object THEN null;
 END $$;
@@ -163,6 +164,15 @@ ALTER TABLE users DROP CONSTRAINT IF EXISTS fk_users_approved_by;
 ALTER TABLE users ADD CONSTRAINT fk_users_approved_by 
   FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL;
 
+-- Hostels
+CREATE TABLE IF NOT EXISTS hostels (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name VARCHAR(100) NOT NULL UNIQUE,
+  warden_id UUID,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
 -- Students (extends users)
 CREATE TABLE IF NOT EXISTS students (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -178,6 +188,8 @@ CREATE TABLE IF NOT EXISTS students (
   mother_name VARCHAR(100),
   mother_phone VARCHAR(20),
   id_card_url TEXT,
+  hostel_id UUID REFERENCES hostels(id) ON DELETE SET NULL,
+  warden_id UUID,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -368,6 +380,10 @@ CREATE TABLE IF NOT EXISTS gate_passes (
   hod_approved_at TIMESTAMP WITH TIME ZONE,
   hod_remarks TEXT,
   
+  warden_approver_id UUID REFERENCES users(id),
+  warden_approved_at TIMESTAMP WITH TIME ZONE,
+  warden_remarks TEXT,
+  
   admin_approver_id UUID REFERENCES users(id),
   admin_approved_at TIMESTAMP WITH TIME ZONE,
   admin_remarks TEXT,
@@ -421,10 +437,15 @@ CREATE INDEX IF NOT EXISTS idx_users_department ON users(department_id);
 CREATE INDEX IF NOT EXISTS idx_students_roll ON students(roll_number);
 CREATE INDEX IF NOT EXISTS idx_students_user ON students(user_id);
 CREATE INDEX IF NOT EXISTS idx_students_class ON students(class_id);
+CREATE INDEX IF NOT EXISTS idx_students_hostel ON students(hostel_id);
+CREATE INDEX IF NOT EXISTS idx_students_warden ON students(warden_id);
 
 -- Faculty
 CREATE INDEX IF NOT EXISTS idx_faculty_user ON faculty(user_id);
 CREATE INDEX IF NOT EXISTS idx_faculty_id_number ON faculty(faculty_id_number);
+
+-- Hostels
+CREATE INDEX IF NOT EXISTS idx_hostels_warden ON hostels(warden_id);
 
 -- Notifications
 CREATE INDEX IF NOT EXISTS idx_notifications_type ON notifications(type);
@@ -460,6 +481,7 @@ CREATE INDEX IF NOT EXISTS idx_gatepasses_user ON gate_passes(user_id);
 CREATE INDEX IF NOT EXISTS idx_gatepasses_status ON gate_passes(status);
 CREATE INDEX IF NOT EXISTS idx_gatepasses_date ON gate_passes(leave_date);
 CREATE INDEX IF NOT EXISTS idx_gatepasses_qr ON gate_passes(qr_token);
+CREATE INDEX IF NOT EXISTS idx_gatepasses_warden ON gate_passes(warden_approver_id);
 
 -- Audit Logs
 CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_logs(user_id);

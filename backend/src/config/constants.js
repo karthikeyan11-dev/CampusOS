@@ -6,6 +6,8 @@ const ROLES = {
   STUDENT: 'student',
   SECURITY_STAFF: 'security_staff',
   MAINTENANCE_STAFF: 'maintenance_staff',
+  WARDEN: 'warden',
+  DEPUTY_WARDEN: 'deputy_warden',
 };
 
 // User account status
@@ -77,16 +79,16 @@ const COMPLAINT_PRIORITY = {
   CRITICAL: 'critical',
 };
 
-// Gate pass status
+// Gate pass status — matches database enum exactly
 const GATE_PASS_STATUS = {
   PENDING_FACULTY: 'pending_faculty',
-  PENDING_HOD: 'pending_hod',
-  PENDING_SUPER_ADMIN: 'pending_super_admin',
+  MENTOR_APPROVED: 'mentor_approved',
+  HOD_APPROVED: 'hod_approved',
+  WARDEN_APPROVED: 'warden_approved',
   APPROVED: 'approved',
-  REJECTED: 'rejected',
   EXITED: 'exited',
   EXPIRED: 'expired',
-  COMPLETED: 'completed',
+  REJECTED: 'rejected',
 };
 
 // Gate pass types
@@ -120,6 +122,7 @@ const PERMISSIONS = {
   'users:manage_all': [ROLES.SUPER_ADMIN],
   'users:approve_faculty': [ROLES.SUPER_ADMIN],
   'users:approve_students': [ROLES.FACULTY, ROLES.DEPARTMENT_ADMIN],
+  'users:approve_staff': [ROLES.SUPER_ADMIN],
   'users:view_department': [ROLES.DEPARTMENT_ADMIN, ROLES.FACULTY],
 
   // Notifications
@@ -141,8 +144,9 @@ const PERMISSIONS = {
   'gatepass:approve_faculty': [ROLES.FACULTY],
   'gatepass:approve_hod': [ROLES.DEPARTMENT_ADMIN],
   'gatepass:approve_admin': [ROLES.SUPER_ADMIN],
+  'gatepass:approve_warden': [ROLES.WARDEN, ROLES.DEPUTY_WARDEN],
   'gatepass:scan': [ROLES.SECURITY_STAFF],
-  'gatepass:view_all': [ROLES.SUPER_ADMIN, ROLES.SECURITY_STAFF],
+  'gatepass:view_all': [ROLES.SUPER_ADMIN, ROLES.SECURITY_STAFF, ROLES.WARDEN, ROLES.DEPUTY_WARDEN],
 
   // Resources
   'resources:manage': [ROLES.SUPER_ADMIN, ROLES.DEPARTMENT_ADMIN],

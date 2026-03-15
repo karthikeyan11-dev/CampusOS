@@ -13,53 +13,57 @@ const registerSchema = Joi.object({
   rollNumber: Joi.when('role', {
     is: ROLES.STUDENT,
     then: Joi.string().required(),
-    otherwise: Joi.forbidden(),
+    otherwise: Joi.optional().allow('', null),
   }),
   classId: Joi.when('role', {
     is: ROLES.STUDENT,
     then: Joi.string().uuid().optional(),
-    otherwise: Joi.forbidden(),
+    otherwise: Joi.optional().allow('', null),
   }),
   batch: Joi.when('role', {
     is: ROLES.STUDENT,
     then: Joi.string().optional(),
-    otherwise: Joi.forbidden(),
+    otherwise: Joi.optional().allow('', null),
   }),
   residenceType: Joi.when('role', {
     is: ROLES.STUDENT,
     then: Joi.string().valid('hosteller', 'day_scholar').optional(),
-    otherwise: Joi.forbidden(),
+    otherwise: Joi.optional().allow('', null),
   }),
-  hostelBlock: Joi.string().optional().allow(''),
-  roomNumber: Joi.string().optional().allow(''),
+  hostelBlock: Joi.string().optional().allow('', null),
+  roomNumber: Joi.string().optional().allow('', null),
   fatherName: Joi.when('role', {
     is: ROLES.STUDENT,
     then: Joi.string().optional(),
-    otherwise: Joi.forbidden(),
+    otherwise: Joi.optional().allow('', null),
   }),
   fatherPhone: Joi.when('role', {
     is: ROLES.STUDENT,
     then: Joi.string().optional(),
-    otherwise: Joi.forbidden(),
+    otherwise: Joi.optional().allow('', null),
   }),
   motherName: Joi.when('role', {
     is: ROLES.STUDENT,
     then: Joi.string().optional(),
-    otherwise: Joi.forbidden(),
+    otherwise: Joi.optional().allow('', null),
   }),
   motherPhone: Joi.when('role', {
     is: ROLES.STUDENT,
     then: Joi.string().optional(),
-    otherwise: Joi.forbidden(),
+    otherwise: Joi.optional().allow('', null),
   }),
 
-  // Faculty-specific fields
+  // Faculty / Warden / Deputy Warden specific fields
   facultyIdNumber: Joi.when('role', {
-    is: Joi.string().valid(ROLES.FACULTY, ROLES.DEPARTMENT_ADMIN),
+    is: Joi.string().valid(ROLES.FACULTY, ROLES.DEPARTMENT_ADMIN, ROLES.WARDEN, ROLES.DEPUTY_WARDEN),
     then: Joi.string().required(),
-    otherwise: Joi.forbidden(),
+    otherwise: Joi.optional().allow('', null),
   }),
-  designation: Joi.string().optional().allow(''),
+  designation: Joi.string().optional().allow('', null),
+
+  // Hostel assignment (for wardens and hosteller students)
+  hostelId: Joi.string().uuid().optional().allow('', null),
+  wardenId: Joi.string().uuid().optional().allow('', null),
 });
 
 const loginSchema = Joi.object({

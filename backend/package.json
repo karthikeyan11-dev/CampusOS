@@ -8,7 +8,8 @@
     "dev": "nodemon src/app.js",
     "migrate": "node src/database/migrate.js",
     "seed": "node src/database/seed.js",
-    "migrate:seed": "node src/database/migrate.js && node src/database/seed.js"
+    "migrate:seed": "node src/database/migrate.js && node src/database/seed.js",
+    "migrate:fix": "node src/database/migrations/20260315_full_system_correction.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

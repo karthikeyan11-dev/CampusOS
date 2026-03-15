@@ -25,7 +25,7 @@ router.get('/:id',
 
 router.patch('/:id/approve',
   authenticate,
-  authorizeAny('gatepass:approve_faculty', 'gatepass:approve_hod', 'gatepass:approve_admin'),
+  authorizeAny('gatepass:approve_faculty', 'gatepass:approve_hod', 'gatepass:approve_warden', 'gatepass:approve_admin'),
   auditLog('gatepass_approval', 'gate_pass'),
   ctrl.approveGatePass
 );

@@ -9,6 +9,7 @@ const { sendNotificationDelivery } = require('./notification_delivery.service');
  * 1. Complaint SLA auto-escalation
  * 2. Gate pass late return detection + parent alerts
  * 3. Gate pass auto-expiry (approved but unused)
+ * 4. Notification reminders
  */
 
 const INTERVAL_MS = 5 * 60 * 1000; // Run every 5 minutes
@@ -43,11 +44,12 @@ const escalateOverdueComplaints = async () => {
 
 /**
  * Job 2: Detect late returns and send parent SMS alerts
- * Triggers when: gate pass is 'active' AND current time > return_date + return_time + 1 hour
+ * Triggers when: gate pass is 'exited' AND current time > return_date + return_time + 1 hour
+ * 
+ * IMPORTANT: Only checks 'exited' passes (NOT 'approved' or other statuses)
  */
 const detectLateReturns = async () => {
   try {
-    // Find active gate passes where return time + 1 hour has passed and alert not yet sent
     const result = await pool.query(
       `SELECT gp.id, gp.user_id, gp.return_date, gp.return_time, gp.late_alert_sent,
               u.name as student_name, d.name as department_name,
@@ -60,6 +62,7 @@ const detectLateReturns = async () => {
          AND gp.late_alert_sent = false
          AND gp.return_date IS NOT NULL
          AND gp.return_time IS NOT NULL
+         AND gp.return_scanned_at IS NULL
          AND (gp.return_date::text || ' ' || gp.return_time::text)::timestamp + interval '1 hour' < NOW()`
     );
 
@@ -67,8 +70,12 @@ const detectLateReturns = async () => {
       const parentPhone = gp.father_phone || gp.mother_phone;
       if (parentPhone) {
         const expectedReturn = `${gp.return_date} ${gp.return_time}`;
-        await sendLateReturnAlert(parentPhone, gp.student_name, expectedReturn);
-        console.log(`🚨 Late return alert sent for ${gp.student_name} (pass ${gp.id})`);
+        try {
+          await sendLateReturnAlert(parentPhone, gp.student_name, expectedReturn);
+          console.log(`🚨 Late return alert sent for ${gp.student_name} (pass ${gp.id})`);
+        } catch (smsErr) {
+          console.error(`SMS alert failed for ${gp.student_name}:`, smsErr.message);
+        }
       }
 
       // Mark alert as sent
@@ -88,7 +95,10 @@ const detectLateReturns = async () => {
 
 /**
  * Job 3: Auto-expire approved gate passes that were never scanned
- * Rule: If status is 'approved' and out_time + 1 hour has passed, mark as expired
+ * 
+ * RULES (from Phase 11):
+ *   - Only expire when: status = 'approved' AND exit_scanned_at IS NULL AND current_time > out_time + 1 hour
+ *   - NEVER expire passes where status = 'exited'
  */
 const expireUnusedGatePasses = async () => {
   try {
@@ -125,11 +135,15 @@ const sendNotificationReminders = async () => {
     );
 
     for (const notif of result.rows) {
-      await sendNotificationDelivery({
-        ...notif,
-        title: `⏰ REMINDER: ${notif.title}`
-      });
-      await pool.query('UPDATE notifications SET reminder_sent = true WHERE id = $1', [notif.id]);
+      try {
+        await sendNotificationDelivery({
+          ...notif,
+          title: `⏰ REMINDER: ${notif.title}`
+        });
+        await pool.query('UPDATE notifications SET reminder_sent = true WHERE id = $1', [notif.id]);
+      } catch (deliveryErr) {
+        console.error(`Reminder delivery failed for notification ${notif.id}:`, deliveryErr.message);
+      }
     }
     
     if (result.rows.length > 0) {
