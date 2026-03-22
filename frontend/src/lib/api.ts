@@ -4,6 +4,7 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/a
 
 const api = axios.create({
   baseURL: API_BASE_URL,
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -15,7 +16,8 @@ api.interceptors.request.use(
     if (typeof window !== 'undefined') {
       const token = localStorage.getItem('accessToken');
       if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
+        // Enforce safe header setting for Axios 1.x compatibility
+        config.headers.set('Authorization', `Bearer ${token}`);
       }
     }
     return config;
@@ -48,6 +50,11 @@ api.interceptors.response.use(
         localStorage.removeItem('accessToken');
         localStorage.removeItem('refreshToken');
         localStorage.removeItem('user');
+        
+        // KILL COOKIES to stop Middleware Loops
+        document.cookie = 'campusos_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+        document.cookie = 'campusos_role=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+
         window.location.href = '/login';
         return Promise.reject(refreshError);
       }
@@ -71,7 +78,12 @@ export const authAPI = {
   logout: () => api.post('/auth/logout'),
   getProfile: () => api.get('/auth/me'),
   getPendingUsers: () => api.get('/auth/users/pending'),
+  getAllUsers: (params?: object) => api.get('/auth/users', { params }),
+  getFacultyMapping: () => api.get('/auth/faculty/mapping'),
   approveUser: (id: string, status: string) => api.patch(`/auth/users/${id}/approve`, { status }),
+  promote: (id: string, data: { role?: string, designation?: string }) => api.patch(`/auth/users/${id}/promote`, data),
+  updateClassAssignment: (data: { className: string, mentorId: string, departmentId: string }) => api.post('/auth/assignments/class', data),
+  updateDepartmentAssignment: (data: { departmentId: string, hodId: string }) => api.post('/auth/assignments/department', data),
 };
 
 // Notifications
@@ -101,18 +113,33 @@ export const gatePassAPI = {
   getById: (id: string) => api.get(`/gatepass/${id}`),
   approve: (id: string, action: string, remarks?: string) =>
     api.patch(`/gatepass/${id}/approve`, { action, remarks }),
-  scan: (qrToken: string, scanType: string) =>
-    api.post('/gatepass/scan', { qrToken, scanType }),
+  scan: (qrToken: string) => api.post('/gatepass/scan', { qrToken }, { 
+    headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' } 
+  }),
+  open: (passId: string) => api.post('/gatepass/open', { passId }, {
+    headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' }
+  }),
+  close: (passId: string) => api.post('/gatepass/close', { passId }, {
+    headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' }
+  }),
+  // Faculty Specific
+  facultyRequest: (data: object) => api.post('/gatepass/faculty', data),
+  facultyApprove: (id: string, action: string, remarks?: string) =>
+    api.patch(`/gatepass/faculty/${id}/approve`, { action, remarks }),
 };
 
 // Resources
 export const resourceAPI = {
   getAll: (params?: object) => api.get('/resources', { params }),
   create: (data: object) => api.post('/resources', data),
+  update: (id: string, data: object) => api.patch(`/resources/${id}`, data),
+  delete: (id: string) => api.delete(`/resources/${id}`),
   book: (data: object) => api.post('/resources/book', data),
   getBookings: (params?: object) => api.get('/resources/bookings', { params }),
   getAvailability: (resourceId: string, date: string) =>
     api.get(`/resources/${resourceId}/availability`, { params: { date } }),
+  checkConflicts: (resourceId: string, startTime: string, endTime: string, skipBookingId?: string) =>
+    api.get(`/resources/${resourceId}/conflicts`, { params: { startTime, endTime, skipBookingId } }),
   approveBooking: (id: string, action: string) =>
     api.patch(`/resources/bookings/${id}/approve`, { action }),
 };
@@ -140,4 +167,30 @@ export const departmentAPI = {
 export const analyticsAPI = {
   getDashboard: () => api.get('/analytics/dashboard'),
   getAuditLogs: (params?: object) => api.get('/analytics/audit-logs', { params }),
+};
+
+// Governance & Institution Management
+export const governanceAPI = {
+  // Departments
+  getDepartments: () => api.get('/governance/departments'),
+  createDepartment: (data: object) => api.post('/governance/departments', data),
+  getDepartmentDetails: (id: string) => api.get(`/governance/departments/${id}`),
+  updateDepartment: (id: string, data: object) => api.patch(`/governance/departments/${id}`, data),
+  deleteDepartment: (id: string) => api.delete(`/governance/departments/${id}`),
+
+  // Hostels
+  getHostels: () => api.get('/governance/hostels'),
+  createHostel: (data: object) => api.post('/governance/hostels', data),
+  getHostelDetails: (id: string) => api.get(`/governance/hostels/${id}`),
+  updateHostel: (id: string, data: object) => api.patch(`/governance/hostels/${id}`, data),
+  deleteHostel: (id: string) => api.delete(`/governance/hostels/${id}`),
+
+  // Mappings
+  getFacultyForMapping: () => api.get('/governance/mappings/faculty'),
+  createHostelMapping: (data: { hostelId: string, wardenId: string }) => 
+    api.post('/governance/mappings/hostel', data),
+
+  // Lookups (High Performance)
+  lookupDepartments: () => api.get('/governance/lookup/departments'),
+  lookupHostels: () => api.get('/governance/lookup/hostels'),
 };

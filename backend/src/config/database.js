@@ -3,30 +3,21 @@ const config = require('./env');
 
 const pool = new Pool({
   connectionString: config.db.connectionString,
-  // Only use detailed params if connectionString is missing
-  ...(!config.db.connectionString && {
-    host: config.db.host,
-    port: config.db.port,
-    database: config.db.name,
-    user: config.db.user,
-    password: config.db.password,
-  }),
   max: 20,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000, // Increased for remote connections
-  // Enable SSL Support for Supabase/Neon/Railway
+  connectionTimeoutMillis: 10000, // Increased timeout to 10s
   ssl: config.db.connectionString ? {
     rejectUnauthorized: false
   } : false
 });
 
-pool.on('connect', () => {
+pool.on('connect', (client) => {
   console.log('📦 Connected to PostgreSQL database');
 });
 
 pool.on('error', (err) => {
-  console.error('❌ Unexpected database error:', err);
-  process.exit(-1);
+  console.error('❌ Unexpected database error:', err.message);
+  // Do NOT exit process on transient errors, let the next query try to reconnect
 });
 
 // Helper for transactional queries

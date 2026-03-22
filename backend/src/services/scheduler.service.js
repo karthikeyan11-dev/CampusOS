@@ -2,6 +2,7 @@ const { pool } = require('../config/database');
 const { COMPLAINT_STATUS, GATE_PASS_STATUS, ESCALATION_SLA } = require('../config/constants');
 const { sendLateReturnAlert } = require('./sms.service');
 const { sendNotificationDelivery } = require('./notification_delivery.service');
+const redisService = require('./redis.service');
 
 /**
  * Scheduled Jobs Service
@@ -58,12 +59,12 @@ const detectLateReturns = async () => {
        JOIN users u ON gp.user_id = u.id
        LEFT JOIN departments d ON u.department_id = d.id
        LEFT JOIN students s ON s.user_id = u.id
-       WHERE gp.status = 'exited'
+       WHERE gp.status IN ('opened', 'yet_to_be_closed')
          AND gp.late_alert_sent = false
          AND gp.return_date IS NOT NULL
          AND gp.return_time IS NOT NULL
          AND gp.return_scanned_at IS NULL
-         AND (gp.return_date::text || ' ' || gp.return_time::text)::timestamp + interval '1 hour' < NOW()`
+         AND (gp.leave_date::text || ' ' || gp.return_time::text)::timestamp + interval '1 hour' < NOW()`
     );
 
     for (const gp of result.rows) {
@@ -78,9 +79,9 @@ const detectLateReturns = async () => {
         }
       }
 
-      // Mark alert as sent
+      // Mark alert as sent ONLY if still in the same status (safe update)
       await pool.query(
-        'UPDATE gate_passes SET late_alert_sent = true WHERE id = $1',
+        "UPDATE gate_passes SET late_alert_sent = true WHERE id = $1 AND status IN ('opened', 'yet_to_be_closed')",
         [gp.id]
       );
     }
@@ -96,23 +97,39 @@ const detectLateReturns = async () => {
 /**
  * Job 3: Auto-expire approved gate passes that were never scanned
  * 
- * RULES (from Phase 11):
- *   - Only expire when: status = 'approved' AND exit_scanned_at IS NULL AND current_time > out_time + 1 hour
- *   - NEVER expire passes where status = 'exited'
+ *   - Only expire when: status = 'approved' OR status = 'yet_to_be_closed' (if passed return time)
+ *   - NEVER expire passes where status = 'closed'
  */
 const expireUnusedGatePasses = async () => {
   try {
-    const result = await pool.query(
-       `UPDATE gate_passes
-        SET status = 'expired', updated_at = NOW()
-        WHERE status = 'approved'
-          AND exit_scanned_at IS NULL
-          AND (leave_date::text || ' ' || out_time::text)::timestamp + interval '1 hour' < NOW()
-        RETURNING id`
-    );
+       // Expire unused approved passes (Both Student and Faculty)
+       await pool.query(
+          `UPDATE gate_passes
+           SET status = 'expired', updated_at = NOW()
+           WHERE status IN ('approved', 'waiting', 'mentor_approved', 'hod_approved', 'warden_approved')
+             AND exit_scanned_at IS NULL
+             AND (
+               (valid_until IS NOT NULL AND valid_until < NOW())
+               OR 
+               (leave_date::text || ' ' || out_time::text)::timestamp + interval '2 hours' < NOW()
+             )`
+       );
 
-    if (result.rows.length > 0) {
-      console.log(`⏰ Auto-expired ${result.rows.length} unused gate pass(es)`);
+       // Expire exited passes that are 24h past return window
+       const lateExpiries = await pool.query(
+          `UPDATE gate_passes
+           SET status = 'expired', updated_at = NOW()
+           WHERE status IN ('opened', 'yet_to_be_closed')
+             AND (
+               (valid_until IS NOT NULL AND valid_until + interval '24 hours' < NOW())
+               OR
+               (leave_date::text || ' ' || return_time::text)::timestamp + interval '24 hours' < NOW()
+             )
+           RETURNING id`
+       );
+
+    if (lateExpiries.rows.length > 0) {
+      console.log(`⏰ Auto-expired ${lateExpiries.rows.length} hosteller gate pass(es) [yet_to_be_closed]`);
     }
   } catch (error) {
     console.error('Gate pass expiry job error:', error.message);
@@ -168,10 +185,22 @@ const startScheduler = () => {
 };
 
 const runAllJobs = async () => {
-  await escalateOverdueComplaints();
-  await detectLateReturns();
-  await expireUnusedGatePasses();
-  await sendNotificationReminders();
+  const lockAcquired = await redisService.acquireLock('campusos_scheduler_job', 290000); // 4 min 50s
+  if (!lockAcquired) {
+    console.log('🕐 Scheduler: Another instance is already running jobs. Skipping...');
+    return;
+  }
+
+  try {
+    await escalateOverdueComplaints();
+    await detectLateReturns();
+    await expireUnusedGatePasses();
+    await sendNotificationReminders();
+  } finally {
+    // We don't necessarily need to release if we want to ensure it only runs once per interval
+    // But releasing is cleaner. The PX (expiry) handles crash safety.
+    await redisService.releaseLock('campusos_scheduler_job');
+  }
 };
 
 module.exports = {

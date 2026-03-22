@@ -52,4 +52,34 @@ router.patch('/users/:id/approve',
   authController.approveUser
 );
 
+router.get('/users',
+  authenticate,
+  authorize('users:view'),
+  authController.getAllUsers
+);
+
+router.get('/faculty/mapping',
+  authenticate,
+  authorize('users:promote'),
+  authController.getFacultyMapping
+);
+
+router.patch('/users/:id/promote',
+  authenticate,
+  authorize('users:promote'),
+  authController.promoteUser
+);
+
+router.post('/assignments/class',
+  authenticate,
+  authorize('users:promote'),
+  authController.updateClassAssignment
+);
+
+router.post('/assignments/department',
+  authenticate,
+  authorize('users:promote'),
+  authController.updateDepartmentAssignment
+);
+
 module.exports = router;

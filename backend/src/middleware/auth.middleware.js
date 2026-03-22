@@ -13,6 +13,7 @@ const authenticate = async (req, res, next) => {
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({
         success: false,
+        error_code: 'UNAUTHORIZED',
         message: 'Access denied. No token provided.',
       });
     }
@@ -30,7 +31,8 @@ const authenticate = async (req, res, next) => {
     if (result.rows.length === 0) {
       return res.status(401).json({
         success: false,
-        message: 'User not found.',
+        error_code: 'USER_NOT_FOUND',
+        message: 'User session invalid.',
       });
     }
 
@@ -39,6 +41,7 @@ const authenticate = async (req, res, next) => {
     if (user.status !== USER_STATUS.APPROVED) {
       return res.status(403).json({
         success: false,
+        error_code: 'ACCOUNT_PENDING',
         message: `Account is ${user.status}. Contact administrator.`,
       });
     }
@@ -50,6 +53,7 @@ const authenticate = async (req, res, next) => {
       name: user.name,
       role: user.role,
       departmentId: user.department_id,
+      approvedAt: user.approved_at,
     };
 
     next();
@@ -57,15 +61,16 @@ const authenticate = async (req, res, next) => {
     if (error.name === 'TokenExpiredError') {
       return res.status(401).json({
         success: false,
+        error_code: 'TOKEN_EXPIRED',
         message: 'Token expired. Please refresh.',
-        code: 'TOKEN_EXPIRED',
       });
     }
 
     if (error.name === 'JsonWebTokenError') {
       return res.status(401).json({
         success: false,
-        message: 'Invalid token.',
+        error_code: 'INVALID_TOKEN',
+        message: 'Invalid token signature.',
       });
     }
 

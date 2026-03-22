@@ -1,9 +1,68 @@
 const { pool } = require('../../config/database');
 const { ROLES, GATE_PASS_STATUS, GATE_PASS_TYPE } = require('../../config/constants');
-const { generateGatePassQR, verifyGatePassQR } = require('../../services/qr.service');
+const { verifyGatePassQR, generateGatePassQR } = require('../../services/qr.service');
 const { getGatePassTimeWindow } = require('./gatepass.service');
-const { sendParentSMS, sendLateReturnAlert } = require('../../services/sms.service');
+const { sendParentSMS } = require('../../services/sms.service');
 const { sendGatePassEmail } = require('../../services/email.service');
+const redisService = require('../../services/redis.service');
+
+// Database Retry with Exponential Backoff
+const withDBRetry = async (fn, maxRetries = 3) => {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await fn();
+    } catch (error) {
+      // 40P01: deadlock, 40001: serialization_failure
+      if (error.code === '40P01' || error.code === '40001') { 
+        if (i === maxRetries - 1) throw error;
+        const delay = Math.pow(2, i) * 100 + Math.random() * 50; // Exponential backoff + jitter
+        console.warn(`♻️ DB Conflict: Retrying (${i+1}/${maxRetries}) after ${delay.toFixed(1)}ms...`);
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      throw error;
+    }
+  }
+};
+
+// Observability Audit Logger (Console + DB)
+const logTransitionToDB = async (passId, actorId, fromStatus, toStatus, remarks = '') => {
+  try {
+    await pool.query(
+      `INSERT INTO gate_pass_logs (gate_pass_id, actor_id, state_from, state_to, remarks)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [passId, actorId, fromStatus, toStatus, remarks]
+    );
+    console.log(`[AUDIT] GatePass ${passId}: ${fromStatus} -> ${toStatus} by ${actorId}`);
+  } catch (error) {
+    console.error('❌ Failed to log transition to DB:', error.message);
+  }
+};
+
+// Cache Invalidator — now uses Redis
+const invalidateScanCache = async (passId) => {
+  // Since we use Redis, we can just clear by passId if we use that as key, 
+  // or clear the specific token. The user asked for gatepass:{id}
+  await redisService.invalidateScan(passId);
+};
+
+// Centralized State Transition Engine
+const ALLOWED_TRANSITIONS = {
+  [GATE_PASS_STATUS.PENDING_FACULTY]: [GATE_PASS_STATUS.MENTOR_APPROVED, GATE_PASS_STATUS.REJECTED],
+  [GATE_PASS_STATUS.MENTOR_APPROVED]: [GATE_PASS_STATUS.HOD_APPROVED, GATE_PASS_STATUS.APPROVED, GATE_PASS_STATUS.REJECTED],
+  [GATE_PASS_STATUS.HOD_APPROVED]: [GATE_PASS_STATUS.WARDEN_APPROVED, GATE_PASS_STATUS.APPROVED, GATE_PASS_STATUS.REJECTED],
+  [GATE_PASS_STATUS.WARDEN_APPROVED]: [GATE_PASS_STATUS.APPROVED, GATE_PASS_STATUS.REJECTED],
+  [GATE_PASS_STATUS.APPROVED]: [GATE_PASS_STATUS.OPENED, GATE_PASS_STATUS.EXPIRED],
+  [GATE_PASS_STATUS.OPENED]: [GATE_PASS_STATUS.YET_TO_BE_CLOSED, GATE_PASS_STATUS.CLOSED],
+  [GATE_PASS_STATUS.YET_TO_BE_CLOSED]: [GATE_PASS_STATUS.CLOSED, GATE_PASS_STATUS.EXPIRED],
+  'waiting': ['hod_approved', 'approved', 'rejected'],
+  'hod_approved': ['approved', 'rejected']
+};
+
+const validateTransition = (current, next) => {
+  const allowed = ALLOWED_TRANSITIONS[current] || [];
+  return allowed.includes(next);
+};
 
 /**
  * POST /gatepass/request
@@ -22,16 +81,20 @@ const requestGatePass = async (req, res, next) => {
 
     // Determine pass type based on residence
     let wardenId = null;
+    let mentorId = null;
+    let hostelId = null;
     if (req.user.role === ROLES.STUDENT) {
       const studentResult = await pool.query(
-        'SELECT residence_type, warden_id FROM students WHERE user_id = $1',
+        'SELECT residence_type, warden_id, mentor_id, hostel_id FROM students WHERE user_id = $1',
         [req.user.id]
       );
       if (studentResult.rows.length > 0) {
         if (studentResult.rows[0].residence_type === 'hosteller') {
           passType = GATE_PASS_TYPE.HOSTELLER;
           wardenId = studentResult.rows[0].warden_id;
+          hostelId = studentResult.rows[0].hostel_id;
         }
+        mentorId = studentResult.rows[0].mentor_id;
       }
     } else if (req.user.role === ROLES.FACULTY) {
       passType = GATE_PASS_TYPE.FACULTY;
@@ -39,13 +102,19 @@ const requestGatePass = async (req, res, next) => {
       passType = GATE_PASS_TYPE.HOD;
     }
 
+    const validUntil = returnDate && returnTime 
+      ? `${leaveDate} ${returnTime}`
+      : `${leaveDate} ${outTime}`; // Standard window for day pass
+
     const result = await pool.query(
-      `INSERT INTO gate_passes (user_id, pass_type, status, reason, leave_date, out_time, return_date, return_time, warden_approver_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-      [req.user.id, passType, initialStatus, reason, leaveDate, outTime, returnDate, returnTime, wardenId]
+      `INSERT INTO gate_passes (user_id, pass_type, status, reason, leave_date, out_time, return_date, return_time, warden_approver_id, faculty_approver_id, hostel_id, user_role, valid_until)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
+      [req.user.id, passType, initialStatus, reason, leaveDate, outTime, returnDate, returnTime, wardenId, mentorId, hostelId, req.user.role, validUntil]
     );
 
-    res.status(201).json({
+    await logTransitionToDB(result.rows[0].id, req.user.id, 'none', initialStatus, 'Initial request');
+
+    return res.status(201).json({
       success: true,
       message: 'Gate pass request submitted.',
       data: result.rows[0],
@@ -60,37 +129,39 @@ const requestGatePass = async (req, res, next) => {
  */
 const getGatePasses = async (req, res, next) => {
   try {
-    const { status, page = 1, limit = 20 } = req.query;
+    const { status, page = 1, limit = 50, passType } = req.query;
     const offset = (page - 1) * limit;
 
     let conditions = [];
     let params = [];
     let idx = 0;
 
-    // Role-based filtering
+    // Role-based visibility
     if (req.user.role === ROLES.STUDENT) {
       idx++; conditions.push(`gp.user_id = $${idx}`); params.push(req.user.id);
     } else if (req.user.role === ROLES.FACULTY) {
-      // Faculty sees pending_faculty passes from their department
-      idx++; conditions.push(`gp.status = $${idx}`); params.push(GATE_PASS_STATUS.PENDING_FACULTY);
-      idx++; conditions.push(`u.department_id = $${idx}`); params.push(req.user.departmentId);
+      // Faculty sees: 1. Their own passes, 2. Student passes they need to approve
+      idx++; 
+      conditions.push(`(gp.user_id = $${idx} OR (gp.status = 'pending_faculty' AND (gp.faculty_approver_id = $${idx} OR gp.faculty_approver_id IS NULL)))`);
+      params.push(req.user.id);
     } else if (req.user.role === ROLES.DEPARTMENT_ADMIN) {
-      // HOD sees mentor_approved passes from their department (for HOD approval step)
-      idx++; conditions.push(`u.department_id = $${idx}`); params.push(req.user.departmentId);
-    } else if (req.user.role === ROLES.WARDEN) {
-      // Warden sees hod_approved hosteller passes assigned to them
-      idx++; conditions.push(`gp.status = $${idx}`); params.push(GATE_PASS_STATUS.HOD_APPROVED);
-      idx++; conditions.push(`gp.pass_type = $${idx}`); params.push(GATE_PASS_TYPE.HOSTELLER);
-      idx++; conditions.push(`gp.warden_approver_id = $${idx}`); params.push(req.user.id);
-    } else if (req.user.role === ROLES.DEPUTY_WARDEN) {
-      // Deputy warden sees hod_approved hosteller passes (fallback for all)
-      idx++; conditions.push(`gp.status = $${idx}`); params.push(GATE_PASS_STATUS.HOD_APPROVED);
-      idx++; conditions.push(`gp.pass_type = $${idx}`); params.push(GATE_PASS_TYPE.HOSTELLER);
+      // HOD sees passes from their department that need HOD approval
+      idx++; 
+      conditions.push(`(gp.user_id = $${idx} OR u.department_id = $${idx})`);
+      params.push(req.user.departmentId);
+    } else if (req.user.role === ROLES.WARDEN || req.user.role === ROLES.DEPUTY_WARDEN) {
+      idx++; 
+      conditions.push(`(gp.user_id = $${idx} OR (gp.status = 'hod_approved' AND gp.pass_type = 'hosteller'))`);
+      params.push(req.user.id);
     } else if (req.user.role === ROLES.SECURITY_STAFF) {
-      conditions.push(`gp.status IN ('approved', 'exited')`);
+       conditions.push(`gp.status IN ('approved', 'opened', 'yet_to_be_closed')`);
     }
 
-    if (status && req.user.role !== ROLES.FACULTY) {
+    if (passType) {
+      idx++; conditions.push(`gp.pass_type = $${idx}`); params.push(passType);
+    }
+
+    if (status && req.user.role === ROLES.SUPER_ADMIN) {
       idx++; conditions.push(`gp.status = $${idx}`); params.push(status);
     }
 
@@ -100,11 +171,23 @@ const getGatePasses = async (req, res, next) => {
       SELECT gp.*, u.name as user_name, u.email as user_email,
              d.name as department_name, d.code as department_code,
              s.roll_number, s.residence_type,
-             s.father_phone, s.mother_phone
+             s.father_phone, s.mother_phone,
+             fa.name as faculty_approver_name,
+             ha.name as hod_approver_name,
+             wa.name as warden_approver_name,
+             aa.name as admin_approver_name,
+             es.name as exit_scanned_by_name,
+             rs.name as return_scanned_by_name
       FROM gate_passes gp
       JOIN users u ON gp.user_id = u.id
       LEFT JOIN departments d ON u.department_id = d.id
       LEFT JOIN students s ON s.user_id = u.id
+      LEFT JOIN users fa ON gp.faculty_approver_id = fa.id
+      LEFT JOIN users ha ON gp.hod_approver_id = ha.id
+      LEFT JOIN users wa ON gp.warden_approver_id = wa.id
+      LEFT JOIN users aa ON gp.admin_approver_id = aa.id
+      LEFT JOIN users es ON gp.exit_scanned_by = es.id
+      LEFT JOIN users rs ON gp.return_scanned_by = rs.id
       ${whereClause}
       ORDER BY gp.created_at DESC
       LIMIT $${idx + 1} OFFSET $${idx + 2}
@@ -188,6 +271,8 @@ const approveGatePass = async (req, res, next) => {
         [req.user.id, remarks, id]
       );
 
+      await logTransitionToDB(id, req.user.id, gp.status, 'rejected', remarks);
+
       return res.json({ success: true, message: 'Gate pass rejected.' });
     }
 
@@ -195,7 +280,6 @@ const approveGatePass = async (req, res, next) => {
     let newStatus, updateField, remarkField, timestampField;
 
     if (gp.status === GATE_PASS_STATUS.PENDING_FACULTY) {
-      // Faculty → mentor_approved
       if (req.user.role !== ROLES.FACULTY && req.user.role !== ROLES.SUPER_ADMIN) {
         return res.status(403).json({ success: false, message: 'Only faculty can approve at this stage.' });
       }
@@ -203,38 +287,40 @@ const approveGatePass = async (req, res, next) => {
       updateField = 'faculty_approver_id';
       remarkField = 'faculty_remarks';
       timestampField = 'faculty_approved_at';
-
     } else if (gp.status === GATE_PASS_STATUS.MENTOR_APPROVED) {
-      // HOD → approved (day_scholar) OR hod_approved (hosteller)
       if (req.user.role !== ROLES.DEPARTMENT_ADMIN && req.user.role !== ROLES.SUPER_ADMIN) {
         return res.status(403).json({ success: false, message: 'Only HOD can approve at this stage.' });
       }
-      if (gp.pass_type === GATE_PASS_TYPE.HOSTELLER) {
-        newStatus = GATE_PASS_STATUS.HOD_APPROVED;
-      } else {
-        // Day scholar / Faculty / HOD → directly approved
-        newStatus = GATE_PASS_STATUS.APPROVED;
-      }
+      newStatus = gp.pass_type === GATE_PASS_TYPE.HOSTELLER ? GATE_PASS_STATUS.HOD_APPROVED : GATE_PASS_STATUS.APPROVED;
       updateField = 'hod_approver_id';
       remarkField = 'hod_remarks';
       timestampField = 'hod_approved_at';
-
     } else if (gp.status === GATE_PASS_STATUS.HOD_APPROVED) {
-      // Warden/Deputy Warden → approved (hosteller only)
       if (req.user.role !== ROLES.WARDEN && req.user.role !== ROLES.DEPUTY_WARDEN && req.user.role !== ROLES.SUPER_ADMIN) {
-        return res.status(403).json({ success: false, message: 'Only warden or deputy warden can approve at this stage.' });
+        return res.status(403).json({ success: false, message: 'Only warden can approve for hostellers.' });
       }
-      // Warden must be assigned to this student
-      if (req.user.role === ROLES.WARDEN && gp.warden_approver_id && gp.warden_approver_id !== req.user.id) {
-        return res.status(403).json({ success: false, message: 'This student is not assigned to your hostel.' });
+      
+      // Strict Warden-Hostel check
+      if (req.user.role === ROLES.WARDEN && gp.hostel_id) {
+        const hostelRes = await pool.query('SELECT id FROM hostels WHERE warden_id = $1 AND id = $2', [req.user.id, gp.hostel_id]);
+        if (hostelRes.rows.length === 0) {
+          return res.status(403).json({ success: false, message: 'You can only approve students from your assigned hostel.' });
+        }
       }
+
       newStatus = GATE_PASS_STATUS.APPROVED;
       updateField = 'warden_approver_id';
       remarkField = 'warden_remarks';
       timestampField = 'warden_approved_at';
+    }
 
-    } else {
-      return res.status(400).json({ success: false, message: 'Gate pass cannot be approved in current state.' });
+    // Validation: Exact role and state match
+    if (!newStatus || !validateTransition(gp.status, newStatus)) {
+      return res.status(400).json({ 
+        success: false, 
+        error_code: 'INVALID_TRANSITION',
+        message: `Cannot move from ${gp.status} to ${newStatus}` 
+      });
     }
 
     let qrToken = null;
@@ -246,23 +332,47 @@ const approveGatePass = async (req, res, next) => {
       qrToken = qrResult.qrToken;
       qrDataUrl = qrResult.qrDataUrl;
 
-      // QR Rule: Generated at max(out_time - 30 mins, approval_time)
-      // Expiry: out_time + 1 hour
       const outDateTime = new Date(`${gp.leave_date}T${gp.out_time}`);
       const qrExpiry = new Date(outDateTime.getTime() + 60 * 60 * 1000);
       const now = new Date();
       const thirtyMinBefore = new Date(outDateTime.getTime() - 30 * 60 * 1000);
       const generationTime = now > thirtyMinBefore ? now : thirtyMinBefore;
 
-      await pool.query(
+      // Snapshot Model (Task 5.3): Fetch Warden Details for Snapshot IF Hosteller
+      let snapWardenName = null;
+      let snapWardenMobile = null;
+      let snapWardenId = null;
+
+      if (gp.residence_type === 'hosteller') {
+        const wardenRes = await pool.query('SELECT name, phone FROM users WHERE id = $1', [req.user.id]);
+        if (wardenRes.rows[0]) {
+          snapWardenName = wardenRes.rows[0].name;
+          snapWardenMobile = wardenRes.rows[0].phone;
+          snapWardenId = req.user.id;
+        }
+      }
+
+      // ATOMIC CONDITIONAL UPDATE with SNAPSHOT
+      const updateResult = await pool.query(
         `UPDATE gate_passes SET status = $1, ${updateField} = $2, 
          ${remarkField} = $3, ${timestampField} = NOW(),
-         qr_token = $4, qr_generated_at = $5, qr_expires_at = $6
-         WHERE id = $7`,
-        [newStatus, req.user.id, remarks, qrToken, generationTime, qrExpiry, id]
+         qr_token = $4, qr_generated_at = $5, qr_expires_at = $6,
+         warden_name = $7, warden_mobile = $8, warden_snapshot_id = $9
+         WHERE id = $10 AND status = $11 RETURNING id`,
+        [newStatus, req.user.id, remarks, qrToken, generationTime, qrExpiry, 
+         snapWardenName, snapWardenMobile, snapWardenId, id, gp.status]
       );
 
-      // Send email notification
+      if (updateResult.rows.length > 0) {
+        await logTransitionToDB(id, req.user.id, gp.status, newStatus, remarks);
+      } else {
+        return res.status(409).json({ 
+          success: false, 
+          error_code: 'CONCURRENCY_ERROR', 
+          message: 'Status was updated by another user.' 
+        });
+      }
+
       try {
         await sendGatePassEmail(
           gp.user_email, gp.user_name, gp.reason,
@@ -273,19 +383,25 @@ const approveGatePass = async (req, res, next) => {
         console.error('Email notification failed:', emailErr.message);
       }
     } else {
-      await pool.query(
+      const updateResult = await pool.query(
         `UPDATE gate_passes SET status = $1, ${updateField} = $2, 
          ${remarkField} = $3, ${timestampField} = NOW()
-         WHERE id = $4`,
-        [newStatus, req.user.id, remarks, id]
+         WHERE id = $4 AND status = $5 RETURNING id`,
+        [newStatus, req.user.id, remarks, id, gp.status]
       );
+
+      if (updateResult.rows.length > 0) {
+        await logTransitionToDB(id, req.user.id, gp.status, newStatus, remarks);
+      } else {
+        return res.status(409).json({ success: false, message: 'Status already updated.' });
+      }
     }
 
     res.json({
       success: true,
       message: newStatus === GATE_PASS_STATUS.APPROVED
-        ? 'Gate pass approved. QR code generated.'
-        : 'Gate pass forwarded for next approval.',
+        ? 'Gate pass approved.'
+        : 'Gate pass forwarded.',
       data: { status: newStatus, qrDataUrl },
     });
   } catch (error) {
@@ -296,32 +412,53 @@ const approveGatePass = async (req, res, next) => {
 /**
  * POST /gatepass/scan
  * 
- * Security scan rules:
- *   - Early (before out_time - 30min): Return EARLY_WAIT, show details, do NOT modify DB
- *   - Within window (out_time - 30min → out_time + 1hr): Allow exit, status → exited
- *   - After window (after out_time + 1hr): Return expired, disable approval
+ * Security scan ONLY fetches and displays data.
+ * It does NOT change state.
  */
 const scanGatePass = async (req, res, next) => {
   try {
-    const { qrToken, scanType } = req.body; // scanType: 'exit' or 'return'
+    const { qrToken } = req.body;
 
-    // Verify QR token
+    // Distributed Cache hit? (Task 1 Phase 2)
     const verification = verifyGatePassQR(qrToken);
     if (!verification.valid) {
       return res.status(400).json({ success: false, message: verification.error });
     }
-
     const { passId } = verification.data;
 
-    // Fetch gate pass with user details
+    const cached = await redisService.getCachedScan(passId);
+    if (cached) {
+      return res.json({ success: true, data: cached, _cached: true });
+    }
+
+    // TASK 2 (Phase 1): Stampede Protection
+    // If not in cache, acquire a short-lived lock to repopulate
+    const acquired = await redisService.getStampedeLock(passId);
+    if (!acquired) {
+      // Small wait and retry once for the cache
+      await new Promise(r => setTimeout(r, 100));
+      const retryCached = await redisService.getCachedScan(passId);
+      if (retryCached) return res.json({ success: true, data: retryCached, _cached: true });
+    }
+
+    // Fetch gate pass with full details: Student, Academic Contacts, Hostel Details
     const gpResult = await pool.query(
-      `SELECT gp.*, u.name as user_name, u.email, u.phone,
+      `SELECT gp.*, 
+              u.name as user_name, u.email as user_email, u.phone as student_phone, u.avatar_url,
               d.name as department_name, d.code as department_code,
-              s.roll_number, s.residence_type, s.father_phone, s.mother_phone
+              s.roll_number, s.residence_type, s.father_phone, s.mother_phone,
+              m.name as mentor_name, m.phone as mentor_phone,
+              hod.name as hod_name, hod.phone as hod_phone,
+              h.name as hostel_name,
+              w.name as warden_name, w.phone as warden_phone, w.id as warden_id
        FROM gate_passes gp
        JOIN users u ON gp.user_id = u.id
        LEFT JOIN departments d ON u.department_id = d.id
        LEFT JOIN students s ON s.user_id = u.id
+       LEFT JOIN users m ON s.mentor_id = m.id
+       LEFT JOIN users hod ON d.hod_id = hod.id
+       LEFT JOIN hostels h ON s.hostel_id = h.id
+       LEFT JOIN users w ON h.warden_id = w.id
        WHERE gp.id = $1`,
       [passId]
     );
@@ -331,121 +468,222 @@ const scanGatePass = async (req, res, next) => {
     }
 
     const gp = gpResult.rows[0];
+    const { scanStatus, validStartTime, canExit } = getGatePassTimeWindow(gp);
 
-    if (scanType === 'exit') {
-      const { scanStatus, validStartTime, canExit } = getGatePassTimeWindow(gp);
-
-      if (gp.status !== GATE_PASS_STATUS.APPROVED && gp.status !== GATE_PASS_STATUS.EXITED) {
-        return res.status(400).json({ success: false, message: `Gate pass is ${gp.status}, not approved.` });
+    // Prepare response with detailed info for the Security Dashboard
+    const responseData = {
+      success: true,
+      data: {
+        pass: {
+          id: gp.id,
+          type: gp.pass_type,
+          status: gp.status,
+          reason: gp.reason,
+          leaveDate: gp.leave_date,
+          outTime: gp.out_time,
+          returnDate: gp.return_date,
+          returnTime: gp.return_time,
+          expiryTime: gp.qr_expires_at,
+          scanStatus,
+          canOpen: canExit && gp.status === GATE_PASS_STATUS.APPROVED,
+          isHosteller: gp.residence_type === 'hosteller'
+        },
+        student: {
+          name: gp.user_name,
+          rollNumber: gp.roll_number,
+          department: gp.department_name,
+          phone: gp.student_phone,
+          residenceType: gp.residence_type
+        },
+        contacts: {
+          mentor: { name: gp.mentor_name, phone: gp.mentor_phone },
+          hod: { name: gp.hod_name, phone: gp.hod_phone },
+          parents: { father: gp.father_phone, mother: gp.mother_phone }
+        },
+        hostel: gp.residence_type === 'hosteller' ? {
+          name: gp.hostel_name,
+          wardenName: gp.warden_name,
+          wardenPhone: gp.warden_phone,
+          wardenId: gp.warden_id
+        } : null
       }
+    };
 
-      // Early Scan — show details but DO NOT modify DB
-      if (scanStatus === 'EARLY') {
-        const waitTime = validStartTime.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
-        return res.json({
-          success: true,
-          status: 'EARLY_WAIT',
-          message: `This gatepass can be opened at or after ${waitTime}. Please wait.`,
-          data: {
-            studentName: gp.user_name,
-            department: gp.department_name,
-            outTime: gp.out_time,
-            returnTime: gp.return_time,
-            reason: gp.reason,
-            status: gp.status
-          }
-        });
-      }
+    // Store in Redis (Task 1 Phase 2)
+    await redisService.cacheScan(passId, responseData.data, 3);
 
-      // Expired Scan — disable approval
-      if (scanStatus === 'EXPIRED' && gp.status !== GATE_PASS_STATUS.EXITED) {
-        return res.json({
-          success: true,
-          status: 'EXPIRED',
-          message: 'This gatepass has expired. Exit window has passed.',
-          data: {
-            studentName: gp.user_name,
-            department: gp.department_name,
-            outTime: gp.out_time,
-            returnTime: gp.return_time,
-            reason: gp.reason,
-            status: 'EXPIRED'
-          }
-        });
-      }
-
-      // Valid window — mark exit
-      if (canExit && gp.status === GATE_PASS_STATUS.APPROVED) {
-        await pool.query(
-          `UPDATE gate_passes SET status = 'exited', exit_scanned_at = NOW(), exit_scanned_by = $1 WHERE id = $2`,
-          [req.user.id, passId]
-        );
-
-        // Send parent SMS
-        if (gp.father_phone || gp.mother_phone) {
-          const parentPhone = gp.father_phone || gp.mother_phone;
-          try {
-            await sendParentSMS(
-              parentPhone, gp.user_name, gp.department_name,
-              new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-              gp.return_time || 'Not specified',
-              gp.reason
-            );
-            await pool.query('UPDATE gate_passes SET parent_sms_sent = true WHERE id = $1', [passId]);
-          } catch (smsErr) {
-            console.error('Parent SMS failed:', smsErr.message);
-          }
-        }
-
-        return res.json({
-          success: true,
-          status: 'EXITED',
-          message: 'Exit recorded.',
-          data: {
-            studentName: gp.user_name,
-            rollNumber: gp.roll_number,
-            department: gp.department_name,
-            reason: gp.reason,
-            returnTime: gp.return_time,
-            returnDate: gp.return_date,
-          },
-        });
-      }
-      
-      // If already exited
-      if (gp.status === GATE_PASS_STATUS.EXITED) {
-        return res.json({
-          success: true,
-          status: 'ALREADY_EXITED',
-          message: 'Student has already exited campus.',
-          data: { studentName: gp.user_name, exitTime: gp.exit_scanned_at }
-        });
-      }
-
-    } else if (scanType === 'return') {
-      if (gp.status !== GATE_PASS_STATUS.EXITED) {
-        return res.status(400).json({ success: false, message: 'Gate pass is not in exited state.' });
-      }
-
-      // Return scan — mark as returned (stay as 'exited' since 'completed' is removed)
-      // We record the return but the status stays 'exited' — the pass is done.
-      await pool.query(
-        `UPDATE gate_passes SET return_scanned_at = NOW(), return_scanned_by = $1 WHERE id = $2`,
-        [req.user.id, passId]
-      );
-
-      return res.json({
-        success: true,
-        message: 'Return recorded. Student is back on campus.',
-        data: { studentName: gp.user_name, department: gp.department_name },
-      });
-    }
-
-    res.status(400).json({ success: false, message: 'Invalid scan type.' });
+    res.json(responseData);
   } catch (error) {
     next(error);
   }
 };
+
+/**
+ * POST /gatepass/open
+ * 
+ * Manual action by Security Staff to record exit.
+ * Transitions: approved → opened → (hosteller) yet_to_be_closed
+ */
+const openGatePass = async (req, res, next) => {
+  return withDBRetry(async () => {
+    const client = await pool.connect();
+    try {
+      const { passId } = req.body;
+      await client.query('BEGIN');
+
+      // 1. Transaction-safe check & lock
+    const gpResult = await client.query(
+      `SELECT gp.*, s.residence_type, u.name as user_name, d.name as department_name, 
+              s.father_phone, s.mother_phone
+       FROM gate_passes gp
+       JOIN users u ON gp.user_id = u.id
+       JOIN students s ON s.user_id = u.id
+       LEFT JOIN departments d ON u.department_id = d.id
+       WHERE gp.id = $1 FOR UPDATE`,
+      [passId]
+    );
+
+    if (gpResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, error_code: 'NOT_FOUND', message: 'Gate pass not found.' });
+    }
+
+    const gp = gpResult.rows[0];
+
+    // 2. Strict state and time window check
+    if (gp.status !== GATE_PASS_STATUS.APPROVED) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ 
+        success: false, 
+        error_code: 'ALREADY_PROCESSED',
+        message: `Pass is already ${gp.status}.` 
+      });
+    }
+
+    const { canExit, scanStatus } = getGatePassTimeWindow(gp);
+    if (!canExit) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: `Exit window is ${scanStatus}.` });
+    }
+
+    // 3. IDEMPOTENT LOGGING (Physical Layer)
+    try {
+      await client.query(
+        `INSERT INTO gate_pass_actions (gate_pass_id, user_id, action_type) VALUES ($1, $2, 'open')`,
+        [passId, req.user.id]
+      );
+    } catch (e) {
+      if (e.code === '23505') { // Unique violation
+        await client.query('ROLLBACK');
+        return res.json({ success: true, message: 'Exit already recorded.' });
+      }
+      throw e;
+    }
+
+    // 4. Atomic Transition
+    const nextStatus = gp.residence_type === 'hosteller' ? GATE_PASS_STATUS.YET_TO_BE_CLOSED : GATE_PASS_STATUS.OPENED;
+    
+      await client.query(
+        `UPDATE gate_passes SET status = $1, exit_scanned_at = NOW(), exit_scanned_by = $2 
+         WHERE id = $3 AND status = 'approved'`,
+        [nextStatus, req.user.id, passId]
+      );
+
+      // 3. Side-Effect Idempotency: Incrementally recorded in gate_pass_actions
+      // If we reach here, it means we committed or are about to.
+      // SMS is triggered only if this specific 'open' action was recorded successfully.
+      
+      await client.query('COMMIT');
+      await invalidateScanCache(passId); // Clear Redis on action
+      await logTransitionToDB(passId, req.user.id, gp.status, nextStatus, 'Gate Opened');
+
+    // parent SMS (Async) - Idempotent because we check action entry previously
+    if (gp.father_phone || gp.mother_phone) {
+      const parentPhone = gp.father_phone || gp.mother_phone;
+      sendParentSMS(
+        parentPhone, gp.user_name, gp.department_name,
+        new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+        gp.return_time || 'Not specified',
+        gp.reason
+      ).catch(err => console.error('SMS Alert Failed:', err.message));
+    }
+
+    res.json({ success: true, message: 'Exit recorded successfully.', data: { new_status: nextStatus } });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+};
+
+/**
+ * POST /gatepass/close
+ * 
+ * Manual action by Security Staff to record return.
+ * Transitions: (opened | yet_to_be_closed) → closed
+ */
+const closeGatePass = async (req, res, next) => {
+  return withDBRetry(async () => {
+    const client = await pool.connect();
+    try {
+      const { passId } = req.body;
+      await client.query('BEGIN');
+
+    const gpResult = await client.query(
+      `SELECT * FROM gate_passes WHERE id = $1 FOR UPDATE`,
+      [passId]
+    );
+
+    if (gpResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Gate pass not found.' });
+    }
+
+    const gp = gpResult.rows[0];
+
+    if (![GATE_PASS_STATUS.OPENED, GATE_PASS_STATUS.YET_TO_BE_CLOSED].includes(gp.status)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: `Pass is ${gp.status}. Cannot close.` });
+    }
+
+    // Idempotent Action Log
+    try {
+      await client.query(
+        `INSERT INTO gate_pass_actions (gate_pass_id, user_id, action_type) VALUES ($1, $2, 'close')`,
+        [passId, req.user.id]
+      );
+    } catch (e) {
+      if (e.code === '23505') {
+        await client.query('ROLLBACK');
+        return res.json({ success: true, message: 'Return already recorded.' });
+      }
+      throw e;
+    }
+
+    // Atomic Update
+      await client.query(
+        `UPDATE gate_passes SET status = 'closed', return_scanned_at = NOW(), return_scanned_by = $1 
+         WHERE id = $2 AND status IN ('opened', 'yet_to_be_closed')`,
+        [req.user.id, passId]
+      );
+
+       await client.query('COMMIT');
+       await invalidateScanCache(passId); // TASK 2: Clear Redis on action
+       await logTransitionToDB(passId, req.user.id, gp.status, 'closed', 'Gate Closed');
+     res.json({ success: true, message: 'Return recorded. Gate pass closed.', data: { new_status: 'closed' } });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+};
+
 
 /**
  * GET /gatepass/:id
@@ -455,12 +693,15 @@ const getGatePassById = async (req, res, next) => {
     const { id } = req.params;
 
     const result = await pool.query(
-      `SELECT gp.*, u.name as user_name, d.name as department_name,
+      `SELECT gp.*, u.name as user_name, u.email as user_email, u.department_id,
+              d.name as department_name, d.code as department_code,
               s.roll_number, s.residence_type,
               fa.name as faculty_approver_name,
               ha.name as hod_approver_name,
               wa.name as warden_approver_name,
-              aa.name as admin_approver_name
+              aa.name as admin_approver_name,
+              es.name as exit_scanned_by_name,
+              rs.name as return_scanned_by_name
        FROM gate_passes gp
        JOIN users u ON gp.user_id = u.id
        LEFT JOIN departments d ON u.department_id = d.id
@@ -469,6 +710,8 @@ const getGatePassById = async (req, res, next) => {
        LEFT JOIN users ha ON gp.hod_approver_id = ha.id
        LEFT JOIN users wa ON gp.warden_approver_id = wa.id
        LEFT JOIN users aa ON gp.admin_approver_id = aa.id
+       LEFT JOIN users es ON gp.exit_scanned_by = es.id
+       LEFT JOIN users rs ON gp.return_scanned_by = rs.id
        WHERE gp.id = $1`,
       [id]
     );
@@ -478,13 +721,168 @@ const getGatePassById = async (req, res, next) => {
     }
 
     const gp = result.rows[0];
+
+    // RBAC: Students can ONLY see their own passes.
+    if (req.user.role === ROLES.STUDENT && gp.user_id !== req.user.id) {
+       return res.status(403).json({ success: false, message: 'Access denied: You can only view your own gate passes.' });
+    }
+
     const { canShowQR } = getGatePassTimeWindow(gp);
 
     if (req.user.role === ROLES.STUDENT && !canShowQR) {
       gp.qr_token = null; // Redact token
     }
 
+    // Generate Timeline from DB logs
+    const logsRes = await pool.query(
+      `SELECT l.*, u.name as actor_name 
+       FROM gate_pass_logs l 
+       LEFT JOIN users u ON l.actor_id = u.id 
+       WHERE l.gate_pass_id = $1 
+       ORDER BY l.created_at ASC`,
+      [id]
+    );
+
+    const timeline = logsRes.rows.map(l => ({
+      action: l.remarks || l.state_to?.replace(/_/g, ' '),
+      actor: l.actor_name,
+      timestamp: l.created_at,
+      remarks: l.remarks
+    }));
+    
+    gp.timeline = timeline;
+
     res.json({ success: true, data: gp });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * POST /gatepass/faculty
+ * Request Faculty/Staff Gatepass
+ */
+const requestFacultyGatePass = async (req, res, next) => {
+  try {
+    const { reason, leaveDate, outTime, returnDate, returnTime } = req.body;
+    
+    // Faculty requests start at 'waiting'
+    const initialStatus = 'waiting';
+    const passType = GATE_PASS_TYPE.FACULTY;
+
+    const validUntil = returnDate && returnTime 
+      ? `${leaveDate} ${returnTime}`
+      : `${leaveDate} ${outTime}`; // Self-expiring after outTime if return not specified
+
+    const result = await pool.query(
+      `INSERT INTO gate_passes (user_id, pass_type, status, reason, leave_date, out_time, return_date, return_time, user_role, valid_until)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+      [req.user.id, passType, initialStatus, reason, leaveDate, outTime, returnDate, returnTime, req.user.role, validUntil]
+    );
+
+    await logTransitionToDB(result.rows[0].id, req.user.id, 'none', initialStatus, 'Faculty gatepass requested');
+
+    res.status(201).json({ success: true, data: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * PATCH /gatepass/faculty/:id/approve
+ * Multi-branch Approval for Faculty
+ */
+const approveFacultyGatePass = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { action, remarks } = req.body;
+    const actorId = req.user.id;
+    const actorRole = req.user.role;
+
+    const gpResult = await pool.query('SELECT * FROM gate_passes WHERE id = $1', [id]);
+    if (gpResult.rows.length === 0) return res.status(404).json({ success: false, message: 'Pass not found' });
+    
+    const gp = gpResult.rows[0];
+    let nextStatus = gp.status;
+
+    // Check branch: Academic vs Non-Academic
+    const userResult = await pool.query('SELECT department_id FROM faculty WHERE user_id = $1', [gp.user_id]);
+    const isAcademic = userResult.rows[0]?.department_id !== null;
+
+    if (action === 'approve') {
+      if (isAcademic) {
+        // Workflow A: waiting -> hod_approved -> approved
+        if (gp.status === 'waiting') {
+          if (actorRole !== ROLES.DEPARTMENT_ADMIN && actorRole !== ROLES.SUPER_ADMIN) {
+            return res.status(403).json({ success: false, message: 'Only HOD or Admin can approve this step' });
+          }
+          nextStatus = actorRole === ROLES.SUPER_ADMIN ? 'approved' : 'hod_approved';
+        } else if (gp.status === 'hod_approved') {
+          if (actorRole !== ROLES.SUPER_ADMIN) return res.status(403).json({ success: false, message: 'Only Admin can finalize this pass' });
+          nextStatus = 'approved';
+        }
+      } else {
+        // Workflow B: waiting -> approved
+        if (actorRole !== ROLES.SUPER_ADMIN) return res.status(403).json({ success: false, message: 'Only Admin can approve non-academic staff' });
+        nextStatus = 'approved';
+      }
+    } else {
+      nextStatus = 'rejected';
+    }
+
+    if (nextStatus === gp.status) return res.status(400).json({ success: false, message: 'Invalid state transition' });
+
+    // === QR GENERATION ON FINAL FACULTY APPROVAL ===
+    let qrToken = null;
+    let qrDataUrl = null;
+    let updateQuery;
+    let params;
+
+    if (nextStatus === 'approved') {
+      const qrResult = await generateGatePassQR(gp);
+      qrToken = qrResult.qrToken;
+      qrDataUrl = qrResult.qrDataUrl;
+
+      const outDateTime = new Date(`${gp.leave_date}T${gp.out_time}`);
+      const qrExpiry = new Date(outDateTime.getTime() + 60 * 60 * 1000); // 1 hour after exit time
+      const now = new Date();
+      const thirtyMinBefore = new Date(outDateTime.getTime() - 30 * 60 * 1000);
+      const generationTime = now > thirtyMinBefore ? now : thirtyMinBefore;
+
+      if (action === 'approve') {
+        updateQuery = `UPDATE gate_passes SET status = $1, 
+                       hod_approver_id = CASE WHEN $1 = 'hod_approved' THEN $2 ELSE hod_approver_id END,
+                       admin_approver_id = CASE WHEN $1 = 'approved' THEN $2 ELSE admin_approver_id END,
+                       hod_approved_at = CASE WHEN $1 = 'hod_approved' THEN NOW() ELSE hod_approved_at END,
+                       admin_approved_at = CASE WHEN $1 = 'approved' THEN NOW() ELSE admin_approved_at END,
+                       hod_remarks = CASE WHEN $1 = 'hod_approved' THEN $3 ELSE hod_remarks END,
+                       admin_remarks = CASE WHEN $1 = 'approved' THEN $3 ELSE admin_remarks END,
+                       qr_token = $5, qr_generated_at = $6, qr_expires_at = $7
+                WHERE id = $4 RETURNING *`;
+        params = [nextStatus, actorId, remarks, id, qrToken, generationTime, qrExpiry];
+      }
+    } else {
+      if (action === 'approve') {
+        updateQuery = `UPDATE gate_passes SET status = $1, 
+                       hod_approver_id = CASE WHEN $1 = 'hod_approved' THEN $2 ELSE hod_approver_id END,
+                       admin_approver_id = CASE WHEN $1 = 'approved' THEN $2 ELSE admin_approver_id END,
+                       hod_approved_at = CASE WHEN $1 = 'hod_approved' THEN NOW() ELSE hod_approved_at END,
+                       admin_approved_at = CASE WHEN $1 = 'approved' THEN NOW() ELSE admin_approved_at END,
+                       hod_remarks = CASE WHEN $1 = 'hod_approved' THEN $3 ELSE hod_remarks END,
+                       admin_remarks = CASE WHEN $1 = 'approved' THEN $3 ELSE admin_remarks END
+                WHERE id = $4 RETURNING *`;
+        params = [nextStatus, actorId, remarks, id];
+      } else {
+        updateQuery = `UPDATE gate_passes SET status = $1, admin_remarks = $3 WHERE id = $4 RETURNING *`;
+        params = [nextStatus, actorId, remarks, id];
+      }
+    }
+
+    const updated = await pool.query(updateQuery, params);
+    
+    await logTransitionToDB(id, actorId, gp.status, nextStatus, remarks);
+
+    res.json({ success: true, data: { ...updated.rows[0], qrDataUrl } });
   } catch (error) {
     next(error);
   }
@@ -493,7 +891,11 @@ const getGatePassById = async (req, res, next) => {
 module.exports = {
   requestGatePass,
   getGatePasses,
+  getGatePassById,
   approveGatePass,
   scanGatePass,
-  getGatePassById,
+  openGatePass,
+  closeGatePass,
+  requestFacultyGatePass,
+  approveFacultyGatePass
 };

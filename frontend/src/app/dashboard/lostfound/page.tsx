@@ -3,82 +3,74 @@
 import { useEffect, useState } from 'react';
 import { lostFoundAPI } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth.store';
-import { formatDate, getStatusColor } from '@/lib/utils';
-import { Search, Plus, Loader2, X, Send, MapPin, CalendarDays, Eye, CheckCircle2, Package } from 'lucide-react';
+import { formatDateTime, getStatusColor } from '@/lib/utils';
+import { Hash, Plus, Loader2, X, Send, Camera, Search, User, MapPin } from 'lucide-react';
 
 export default function LostFoundPage() {
   const { user } = useAuthStore();
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
-  const [selectedItem, setSelectedItem] = useState<any>(null);
+  const [creating, setCreating] = useState(false);
   const [filter, setFilter] = useState('');
 
   const [form, setForm] = useState({
-    type: 'lost', title: '', description: '', location: '', itemDate: '', contactInfo: '',
+    title: '', description: '', locationFound: '', type: 'lost' as 'lost' | 'found', category: '',
   });
-  const [creating, setCreating] = useState(false);
+  const [image, setImage] = useState<File | null>(null);
 
-  useEffect(() => { loadItems(); }, [filter]);
+  useEffect(() => { loadData(); }, [filter]);
 
-  const loadItems = async () => {
+  const loadData = async () => {
     setLoading(true);
     try {
-      const params: any = { limit: 50 };
-      if (filter) params.type = filter;
-      const res = await lostFoundAPI.getAll(params);
+      const res = await lostFoundAPI.getAll(filter ? { type: filter } : {});
       setItems(res.data.data || []);
-    } catch (err) { console.error(err); }
-    finally { setLoading(false); }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     setCreating(true);
     try {
-      await lostFoundAPI.create(new FormData(e.currentTarget as HTMLFormElement));
-      // Fallback: text-based create
-      await lostFoundAPI.getAll();
-      setShowCreate(false);
-      setForm({ type: 'lost', title: '', description: '', location: '', itemDate: '', contactInfo: '' });
-      loadItems();
-    } catch (err: any) {
-      // Try form data approach
-      try {
-        const fd = new FormData();
-        Object.entries(form).forEach(([k, v]) => fd.append(k, v));
-        await lostFoundAPI.create(fd);
-        setShowCreate(false);
-        loadItems();
-      } catch (err2: any) {
-        alert(err2.response?.data?.message || 'Failed');
-      }
-    } finally { setCreating(false); }
-  };
+      const formData = new FormData();
+      Object.entries(form).forEach(([key, val]) => formData.append(key, val));
+      if (image) formData.append('image', image);
 
-  const handleViewDetail = async (id: string) => {
-    try {
-      const res = await lostFoundAPI.getById(id);
-      setSelectedItem(res.data.data);
-    } catch (err) { console.error(err); }
+      await lostFoundAPI.create(formData);
+      setShowCreate(false);
+      setForm({ title: '', description: '', locationFound: '', type: 'lost', category: '' });
+      setImage(null);
+      loadData();
+    } catch (err: any) {
+      alert(err.response?.data?.message || 'Failed to post item');
+    } finally {
+      setCreating(false);
+    }
   };
 
   const handleResolve = async (id: string) => {
+    if (!confirm('Mark this item as resolved/returned?')) return;
     try {
       await lostFoundAPI.resolve(id);
-      setSelectedItem(null);
-      loadItems();
-    } catch (err: any) { alert(err.response?.data?.message || 'Failed'); }
+      loadData();
+    } catch (err: any) {
+      alert(err.response?.data?.message || 'Failed');
+    }
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-fade-in pb-20">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-bold flex items-center gap-2">
-            <Search className="w-5 h-5 text-amber-400" /> Lost & Found
+            <Hash className="w-5 h-5 text-cos-primary" /> Lost & Found
           </h2>
-          <p className="text-sm text-cos-text-secondary mt-1">Report and find lost items on campus</p>
+          <p className="text-sm text-cos-text-secondary mt-1">Recover lost items or report found property</p>
         </div>
         <button onClick={() => setShowCreate(true)} className="btn-primary flex items-center gap-2 text-sm">
           <Plus className="w-4 h-4" /> Report Item
@@ -87,39 +79,56 @@ export default function LostFoundPage() {
 
       {/* Filters */}
       <div className="flex gap-2">
-        {['', 'lost', 'found'].map(f => (
-          <button key={f} onClick={() => setFilter(f)}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${filter === f ? 'gradient-bg text-white' : 'bg-cos-bg-card border border-cos-border text-cos-text-secondary'}`}>
-            {f === '' ? 'All Items' : f === 'lost' ? '🔴 Lost' : '🟢 Found'}
+        {['', 'lost', 'found'].map(t => (
+          <button key={t} onClick={() => setFilter(t)}
+            className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-widest transition-all ${filter === t ? 'gradient-bg text-white' : 'bg-cos-bg-card border border-cos-border text-cos-text-muted'}`}>
+            {t === '' ? 'All Items' : t}
           </button>
         ))}
       </div>
 
-      {/* Items Grid */}
       {loading ? (
-        <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-cos-primary" /></div>
+        <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-cos-primary" /></div>
       ) : items.length === 0 ? (
-        <div className="glass-card p-12 text-center">
-          <Package className="w-12 h-12 text-cos-text-muted mx-auto mb-3" />
-          <p className="text-cos-text-secondary">No items reported yet</p>
+        <div className="glass-card p-20 text-center border-dashed border-2">
+          <Search className="w-12 h-12 text-cos-text-muted mx-auto mb-4 opacity-20" />
+          <p className="text-cos-text-secondary font-medium italic">No items matching your search</p>
         </div>
       ) : (
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
           {items.map((item: any) => (
-            <div key={item.id} className="glass-card glass-card-hover p-5 cursor-pointer" onClick={() => handleViewDetail(item.id)}>
-              <div className="flex items-center gap-2 mb-3">
-                <span className={`badge text-[10px] ${item.type === 'lost' ? 'bg-red-500/20 text-red-400 border-red-500/30' : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'}`}>
-                  {item.type === 'lost' ? '🔴 Lost' : '🟢 Found'}
-                </span>
-                <span className={`badge text-[10px] ${getStatusColor(item.status)}`}>{item.status}</span>
-              </div>
-              <h3 className="font-semibold mb-1">{item.title}</h3>
-              <p className="text-xs text-cos-text-secondary line-clamp-2 mb-3">{item.description}</p>
-              <div className="space-y-1 text-xs text-cos-text-muted">
-                {item.location && <p className="flex items-center gap-1"><MapPin className="w-3 h-3" /> {item.location}</p>}
-                {item.item_date && <p className="flex items-center gap-1"><CalendarDays className="w-3 h-3" /> {formatDate(item.item_date)}</p>}
-                <p>Reported by {item.reported_by_name}</p>
-              </div>
+            <div key={item.id} className="glass-card glass-card-hover group relative overflow-hidden">
+               {item.image_url && (
+                 <div className="h-48 overflow-hidden bg-black/20">
+                    <img src={item.image_url} alt={item.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                 </div>
+               )}
+               <div className="p-6">
+                 <div className="flex items-start justify-between mb-4">
+                   <div className={`badge text-[10px] font-black uppercase tracking-widest ${item.type === 'lost' ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'}`}>
+                     {item.type}
+                   </div>
+                   <span className="text-[10px] text-cos-text-muted font-bold uppercase">{formatDateTime(item.created_at)}</span>
+                 </div>
+                 <h3 className="font-bold text-lg mb-2">{item.title}</h3>
+                 <p className="text-xs text-cos-text-secondary line-clamp-2 mb-4 leading-relaxed">{item.description}</p>
+                 
+                 <div className="space-y-2 text-xs text-cos-text-muted font-medium mb-6">
+                    <div className="flex items-center gap-2"><MapPin className="w-3.5 h-3.5 text-cos-primary" /> {item.location_found}</div>
+                    <div className="flex items-center gap-2"><User className="w-3.5 h-3.5 text-cos-primary" /> Posted by {item.reporter_name}</div>
+                 </div>
+
+                 {item.status === 'open' && (item.reporter_id === user?.id || user?.role === 'super_admin') && (
+                   <button onClick={() => handleResolve(item.id)} className="w-full btn-secondary text-[10px] font-black uppercase tracking-widest py-3">
+                     Mark Resolved
+                   </button>
+                 )}
+                 {item.status === 'resolved' && (
+                   <div className="w-full py-3 text-center text-[10px] font-black uppercase tracking-widest text-emerald-400 bg-emerald-500/5 rounded-xl border border-emerald-500/10">
+                     Resolved
+                   </div>
+                 )}
+               </div>
             </div>
           ))}
         </div>
@@ -128,93 +137,61 @@ export default function LostFoundPage() {
       {/* Create Modal */}
       {showCreate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 modal-overlay" onClick={() => setShowCreate(false)}>
-          <div className="glass-card p-6 w-full max-w-lg animate-fade-in" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-semibold">Report Item</h3>
-              <button onClick={() => setShowCreate(false)}><X className="w-5 h-5 text-cos-text-muted" /></button>
-            </div>
-            <form onSubmit={handleCreate} className="space-y-4">
-              <div>
-                <label className="block text-sm text-cos-text-secondary mb-1.5">Type</label>
-                <div className="flex gap-3">
-                  {['lost', 'found'].map(t => (
-                    <button key={t} type="button" onClick={() => setForm(p => ({ ...p, type: t }))}
-                      className={`flex-1 py-2.5 rounded-lg border text-sm transition-all ${form.type === t
-                        ? t === 'lost' ? 'border-red-500 bg-red-500/10 text-red-400' : 'border-emerald-500 bg-emerald-500/10 text-emerald-400'
-                        : 'border-cos-border text-cos-text-secondary'
-                      }`}>
-                      {t === 'lost' ? '🔴 I Lost Something' : '🟢 I Found Something'}
-                    </button>
-                  ))}
-                </div>
+           <div className="glass-card p-8 w-full max-w-xl animate-fade-in relative z-50" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-8">
+                 <h3 className="text-xl font-bold flex items-center gap-2">
+                   <Send className="w-5 h-5 text-cos-primary" /> Report Property
+                 </h3>
+                 <button onClick={() => setShowCreate(false)} className="hover:rotate-90 transition-transform">
+                   <X className="w-6 h-6 text-cos-text-muted" />
+                 </button>
               </div>
-              <div>
-                <label className="block text-sm text-cos-text-secondary mb-1.5">Item Name</label>
-                <input className="input-field" value={form.title} onChange={e => setForm(p => ({ ...p, title: e.target.value }))} required placeholder="e.g., Blue Water Bottle" />
-              </div>
-              <div>
-                <label className="block text-sm text-cos-text-secondary mb-1.5">Description</label>
-                <textarea className="input-field min-h-[80px] resize-none" value={form.description} onChange={e => setForm(p => ({ ...p, description: e.target.value }))} required placeholder="Describe the item in detail..." />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm text-cos-text-secondary mb-1.5">Location</label>
-                  <input className="input-field" value={form.location} onChange={e => setForm(p => ({ ...p, location: e.target.value }))} placeholder="Where was it lost/found?" />
-                </div>
-                <div>
-                  <label className="block text-sm text-cos-text-secondary mb-1.5">Date</label>
-                  <input type="date" className="input-field" value={form.itemDate} onChange={e => setForm(p => ({ ...p, itemDate: e.target.value }))} />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm text-cos-text-secondary mb-1.5">Contact Info</label>
-                <input className="input-field" value={form.contactInfo} onChange={e => setForm(p => ({ ...p, contactInfo: e.target.value }))} placeholder="Phone or email" />
-              </div>
-              <button type="submit" disabled={creating} className="btn-primary w-full flex items-center justify-center gap-2">
-                {creating ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Send className="w-4 h-4" /> Report</>}
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
 
-      {/* Detail Modal */}
-      {selectedItem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 modal-overlay" onClick={() => setSelectedItem(null)}>
-          <div className="glass-card p-6 w-full max-w-lg animate-fade-in" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex gap-2">
-                <span className={`badge text-xs ${selectedItem.type === 'lost' ? 'bg-red-500/20 text-red-400 border-red-500/30' : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'}`}>
-                  {selectedItem.type}
-                </span>
-                <span className={`badge text-xs ${getStatusColor(selectedItem.status)}`}>{selectedItem.status}</span>
-              </div>
-              <button onClick={() => setSelectedItem(null)}><X className="w-5 h-5 text-cos-text-muted" /></button>
-            </div>
-            <h3 className="text-xl font-bold mb-2">{selectedItem.title}</h3>
-            <p className="text-sm text-cos-text-secondary mb-4">{selectedItem.description}</p>
-            <div className="space-y-2 text-sm text-cos-text-muted">
-              {selectedItem.location && <p><strong>Location:</strong> {selectedItem.location}</p>}
-              {selectedItem.item_date && <p><strong>Date:</strong> {formatDate(selectedItem.item_date)}</p>}
-              <p><strong>Reported by:</strong> {selectedItem.reported_by_name}</p>
-              {selectedItem.reported_by_email && <p><strong>Contact:</strong> {selectedItem.reported_by_email}</p>}
-            </div>
-            {selectedItem.matches && selectedItem.matches.length > 0 && (
-              <div className="mt-4 p-3 bg-cos-primary/10 rounded-lg">
-                <p className="text-xs font-medium text-cos-primary mb-2">🔗 Potential Matches</p>
-                {selectedItem.matches.map((m: any) => (
-                  <div key={m.id} className="text-xs text-cos-text-secondary p-2 bg-cos-bg-secondary/50 rounded mb-1">
-                    {m.title} — {m.description?.substring(0, 60)}
-                  </div>
-                ))}
-              </div>
-            )}
-            {selectedItem.status === 'reported' && selectedItem.reported_by === user?.id && (
-              <button onClick={() => handleResolve(selectedItem.id)} className="btn-primary w-full mt-4 flex items-center justify-center gap-2">
-                <CheckCircle2 className="w-4 h-4" /> Mark as Resolved
-              </button>
-            )}
-          </div>
+              <form onSubmit={handleCreate} className="space-y-6">
+                 <div className="flex gap-4 p-1 rounded-2xl bg-black/20 border border-white/5">
+                    {['lost', 'found'].map(t => (
+                      <button key={t} type="button" onClick={() => setForm(f => ({ ...f, type: t as any }))}
+                        className={`flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${form.type === t ? 'gradient-bg text-white shadow-lg' : 'text-cos-text-muted hover:text-white'}`}>
+                        {t}
+                      </button>
+                    ))}
+                 </div>
+
+                 <div className="grid md:grid-cols-2 gap-6">
+                    <div className="md:col-span-2 space-y-2">
+                       <label className="text-[10px] font-black uppercase tracking-widest text-cos-text-muted ml-1">Item Title</label>
+                       <input className="input-field py-4" value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} required placeholder="Ex: Black Nike Wallet" />
+                    </div>
+                    <div className="space-y-2">
+                       <label className="text-[10px] font-black uppercase tracking-widest text-cos-text-muted ml-1">Location Reported</label>
+                       <input className="input-field py-4" value={form.locationFound} onChange={e => setForm(f => ({ ...f, locationFound: e.target.value }))} required placeholder="Ex: Canteen / LH-204" />
+                    </div>
+                    <div className="space-y-2">
+                       <label className="text-[10px] font-black uppercase tracking-widest text-cos-text-muted ml-1">Item Category</label>
+                       <input className="input-field py-4" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} placeholder="Ex: Electronics" />
+                    </div>
+                    <div className="md:col-span-2 space-y-2">
+                       <label className="text-[10px] font-black uppercase tracking-widest text-cos-text-muted ml-1">Description</label>
+                       <textarea className="input-field py-4 min-h-[100px] resize-none" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} required placeholder="Describe the item in detail..." />
+                    </div>
+                    <div className="md:col-span-2 space-y-2">
+                       <label className="text-[10px] font-black uppercase tracking-widest text-cos-text-muted ml-1">Item Photograph (Optional)</label>
+                       <div className="relative group">
+                          <input type="file" accept="image/*" onChange={e => setImage(e.target.files?.[0] || null)} 
+                            className="absolute inset-0 opacity-0 cursor-pointer z-10" />
+                          <div className="btn-secondary w-full py-6 flex flex-col items-center gap-2 group-hover:border-cos-primary/50 transition-colors">
+                             <Camera className="w-8 h-8 opacity-20 group-hover:text-cos-primary transition-colors" />
+                             <span className="text-[10px] font-black uppercase tracking-widest">{image ? image.name : 'Upload Image'}</span>
+                          </div>
+                       </div>
+                    </div>
+                 </div>
+
+                 <button type="submit" disabled={creating} className="btn-primary w-full py-4 text-xs font-black uppercase tracking-widest shadow-lg shardow-orange-500/20">
+                    {creating ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Broadcast Publication'}
+                 </button>
+              </form>
+           </div>
         </div>
       )}
     </div>

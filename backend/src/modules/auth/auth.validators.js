@@ -1,12 +1,12 @@
 const Joi = require('joi');
-const { ROLES } = require('../../config/constants');
+const { ROLES, REGISTRATION_ROLES } = require('../../config/constants');
 
 const registerSchema = Joi.object({
   email: Joi.string().email().required(),
   password: Joi.string().min(8).max(128).required(),
   name: Joi.string().min(2).max(100).required(),
   phone: Joi.string().pattern(/^\+?[1-9]\d{6,14}$/).optional(),
-  role: Joi.string().valid(...Object.values(ROLES)).required(),
+  role: Joi.string().valid(...REGISTRATION_ROLES).required(),
   departmentId: Joi.string().uuid().optional(),
 
   // Student-specific fields

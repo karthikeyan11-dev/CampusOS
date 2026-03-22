@@ -13,6 +13,13 @@ router.post('/request',
   ctrl.requestGatePass
 );
 
+router.post('/faculty',
+  authenticate,
+  restrictTo(ROLES.FACULTY, ROLES.DEPARTMENT_ADMIN, ROLES.WARDEN, ROLES.DEPUTY_WARDEN, ROLES.SECURITY_STAFF, ROLES.MAINTENANCE_STAFF),
+  auditLog('faculty_gatepass_requested', 'gate_pass'),
+  ctrl.requestFacultyGatePass
+);
+
 router.get('/',
   authenticate,
   ctrl.getGatePasses
@@ -30,11 +37,32 @@ router.patch('/:id/approve',
   ctrl.approveGatePass
 );
 
+router.patch('/faculty/:id/approve',
+  authenticate,
+  restrictTo(ROLES.DEPARTMENT_ADMIN, ROLES.SUPER_ADMIN),
+  auditLog('faculty_gatepass_approval', 'gate_pass'),
+  ctrl.approveFacultyGatePass
+);
+
 router.post('/scan',
   authenticate,
   authorize('gatepass:scan'),
   auditLog('gatepass_scanned', 'gate_pass'),
   ctrl.scanGatePass
+);
+
+router.post('/open',
+  authenticate,
+  authorize('gatepass:scan'),
+  auditLog('gatepass_opened', 'gate_pass'),
+  ctrl.openGatePass
+);
+
+router.post('/close',
+  authenticate,
+  authorize('gatepass:scan'),
+  auditLog('gatepass_closed', 'gate_pass'),
+  ctrl.closeGatePass
 );
 
 module.exports = router;

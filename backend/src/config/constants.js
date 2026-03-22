@@ -10,6 +10,14 @@ const ROLES = {
   DEPUTY_WARDEN: 'deputy_warden',
 };
 
+// Roles allowed during self-registration
+const REGISTRATION_ROLES = [
+  ROLES.STUDENT,
+  ROLES.FACULTY,
+  ROLES.SECURITY_STAFF,
+  ROLES.MAINTENANCE_STAFF
+];
+
 // User account status
 const USER_STATUS = {
   PENDING: 'pending',
@@ -86,7 +94,9 @@ const GATE_PASS_STATUS = {
   HOD_APPROVED: 'hod_approved',
   WARDEN_APPROVED: 'warden_approved',
   APPROVED: 'approved',
-  EXITED: 'exited',
+  OPENED: 'opened',
+  YET_TO_BE_CLOSED: 'yet_to_be_closed',
+  CLOSED: 'closed',
   EXPIRED: 'expired',
   REJECTED: 'rejected',
 };
@@ -166,6 +176,12 @@ const PERMISSIONS = {
 
   // Departments
   'departments:manage': [ROLES.SUPER_ADMIN],
+
+  // Hostel Management
+  'hostels:manage': [ROLES.SUPER_ADMIN],
+
+  // User Promotion
+  'users:promote': [ROLES.SUPER_ADMIN],
 };
 
 // Escalation SLA timelines (in hours)
@@ -178,6 +194,7 @@ const ESCALATION_SLA = {
 
 module.exports = {
   ROLES,
+  REGISTRATION_ROLES,
   USER_STATUS,
   NOTIFICATION_TYPES,
   NOTIFICATION_TARGETS,

@@ -1,6 +1,7 @@
 const { pool, withTransaction } = require('../../config/database');
 const { ROLES, BOOKING_STATUS } = require('../../config/constants');
 const { generateBookingQR } = require('../../services/qr.service');
+const redisService = require('../../services/redis.service');
 
 /**
  * GET /resources
@@ -8,23 +9,34 @@ const { generateBookingQR } = require('../../services/qr.service');
 const getResources = async (req, res, next) => {
   try {
     const { type, departmentId } = req.query;
-    let conditions = ['r.is_active = true'];
-    let params = [];
-    let idx = 0;
+    
+    // Cache Key: resources:list:{type}:{deptId}
+    const cacheKey = `resources:list:${type || 'all'}:${departmentId || 'all'}`;
 
-    if (type) { idx++; conditions.push(`r.type = $${idx}`); params.push(type); }
-    if (departmentId) { idx++; conditions.push(`r.department_id = $${idx}`); params.push(departmentId); }
+    const resources = await redisService.getOrSetCache(
+      cacheKey,
+      async () => {
+        let conditions = ['r.is_active = true'];
+        let params = [];
+        let idx = 0;
 
-    const result = await pool.query(
-      `SELECT r.*, d.name as department_name
-       FROM resources r
-       LEFT JOIN departments d ON r.department_id = d.id
-       WHERE ${conditions.join(' AND ')}
-       ORDER BY r.name`,
-      params
+        if (type) { idx++; conditions.push(`r.type = $${idx}`); params.push(type); }
+        if (departmentId) { idx++; conditions.push(`r.department_id = $${idx}`); params.push(departmentId); }
+
+        const result = await pool.query(
+          `SELECT r.*, d.name as department_name
+           FROM resources r
+           LEFT JOIN departments d ON r.department_id = d.id
+           WHERE ${conditions.join(' AND ')}
+           ORDER BY r.name`,
+          params
+        );
+        return result.rows;
+      },
+      3600 // 1 hour TTL
     );
 
-    res.json({ success: true, data: result.rows });
+    res.json({ success: true, data: resources });
   } catch (error) {
     next(error);
   }
@@ -35,15 +47,70 @@ const getResources = async (req, res, next) => {
  */
 const createResource = async (req, res, next) => {
   try {
-    const { name, type, location, capacity, departmentId, description, amenities } = req.body;
+    const { name, type, location, capacity, department_id, description, amenities } = req.body;
 
     const result = await pool.query(
       `INSERT INTO resources (name, type, location, capacity, department_id, description, amenities)
        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [name, type, location, capacity, departmentId, description, amenities]
+      [name, type, location, capacity, department_id, description, amenities]
     );
 
+    // Invalidate list
+    await redisService.invalidatePattern('resources:list:*');
+
     res.status(201).json({ success: true, data: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * PATCH /resources/:id
+ */
+const updateResource = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { name, type, location, capacity, department_id, description, amenities, is_active } = req.body;
+
+    const result = await pool.query(
+      `UPDATE resources 
+       SET name = COALESCE($1, name), 
+           type = COALESCE($2, type), 
+           location = COALESCE($3, location), 
+           capacity = COALESCE($4, capacity), 
+           department_id = COALESCE($5, department_id), 
+           description = COALESCE($6, description), 
+           amenities = COALESCE($7, amenities),
+           is_active = COALESCE($8, is_active),
+           updated_at = NOW()
+       WHERE id = $9 RETURNING *`,
+      [name, type, location, capacity, department_id, description, amenities, is_active, id]
+    );
+
+    if (result.rows.length === 0) return res.status(404).json({ success: false, message: 'Resource not found' });
+    
+    // Invalidate
+    await redisService.invalidatePattern('resources:list:*');
+    
+    res.json({ success: true, data: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * DELETE /resources/:id
+ */
+const deleteResource = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query('UPDATE resources SET is_active = false WHERE id = $1 RETURNING *', [id]);
+    if (result.rows.length === 0) return res.status(404).json({ success: false, message: 'Resource not found' });
+    
+    // Invalidate
+    await redisService.invalidatePattern('resources:list:*');
+    
+    res.json({ success: true, message: 'Resource deactivated successfully' });
   } catch (error) {
     next(error);
   }
@@ -105,18 +172,26 @@ const getAvailability = async (req, res, next) => {
     const startOfDay = `${date}T00:00:00`;
     const endOfDay = `${date}T23:59:59`;
 
-    const bookings = await pool.query(
-      `SELECT b.id, b.title, b.start_time, b.end_time, b.status, u.name as booked_by_name
-       FROM bookings b
-       JOIN users u ON b.booked_by = u.id
-       WHERE b.resource_id = $1 
-       AND b.status IN ('approved', 'pending')
-       AND b.start_time >= $2 AND b.end_time <= $3
-       ORDER BY b.start_time`,
-      [resourceId, startOfDay, endOfDay]
+    // Availability is high-velocity: 1 minute cache
+    const data = await redisService.getOrSetCache(
+      `resources:${resourceId}:availability:${date}`,
+      async () => {
+        const bookings = await pool.query(
+          `SELECT b.id, b.title, b.start_time, b.end_time, b.status, u.name as booked_by_name
+           FROM bookings b
+           JOIN users u ON b.booked_by = u.id
+           WHERE b.resource_id = $1 
+           AND b.status IN ('approved', 'pending')
+           AND b.start_time >= $2 AND b.end_time <= $3
+           ORDER BY b.start_time`,
+          [resourceId, startOfDay, endOfDay]
+        );
+        return bookings.rows;
+      },
+      60 
     );
 
-    res.json({ success: true, data: bookings.rows });
+    res.json({ success: true, data });
   } catch (error) {
     next(error);
   }
@@ -133,6 +208,11 @@ const approveBooking = async (req, res, next) => {
     const newStatus = action === 'approve' ? BOOKING_STATUS.APPROVED : BOOKING_STATUS.REJECTED;
 
     let qrToken = null;
+    let resourceId = null;
+    
+    const bookingLookup = await pool.query('SELECT resource_id FROM bookings WHERE id = $1', [id]);
+    if (bookingLookup.rows[0]) resourceId = bookingLookup.rows[0].resource_id;
+
     if (newStatus === BOOKING_STATUS.APPROVED) {
       const booking = await pool.query('SELECT * FROM bookings WHERE id = $1', [id]);
       if (booking.rows.length > 0) {
@@ -149,6 +229,11 @@ const approveBooking = async (req, res, next) => {
 
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Booking not found or already processed.' });
+    }
+
+    // Invalidate availability for this resource
+    if (resourceId) {
+      await redisService.invalidatePattern(`resources:${resourceId}:availability:*`);
     }
 
     res.json({
@@ -168,12 +253,16 @@ const getBookings = async (req, res, next) => {
   try {
     const { status, resourceId, page = 1, limit = 20 } = req.query;
     const offset = (page - 1) * limit;
+    
+    // Personal/Admin Bookings: High velocity, no cache or very short (30s)
     let conditions = [];
     let params = [];
     let idx = 0;
 
     if (req.user.role === ROLES.FACULTY) {
       idx++; conditions.push(`b.booked_by = $${idx}`); params.push(req.user.id);
+    } else if (req.user.role === ROLES.DEPARTMENT_ADMIN) {
+      idx++; conditions.push(`r.department_id = $${idx}`); params.push(req.user.departmentId);
     }
 
     if (status) { idx++; conditions.push(`b.status = $${idx}`); params.push(status); }
@@ -200,11 +289,44 @@ const getBookings = async (req, res, next) => {
   }
 };
 
+/**
+ * GET /resources/:resourceId/conflicts
+ */
+const checkConflicts = async (req, res, next) => {
+  try {
+    const { resourceId } = req.params;
+    const { startTime, endTime, skipBookingId } = req.query;
+
+    let query = `
+      SELECT b.id, b.title, b.start_time, b.end_time, u.name as booked_by_name
+      FROM bookings b
+      JOIN users u ON b.booked_by = u.id
+      WHERE b.resource_id = $1 
+      AND b.status = 'approved'
+      AND tstzrange(b.start_time, b.end_time) && tstzrange($2::timestamptz, $3::timestamptz)
+    `;
+    const params = [resourceId, startTime, endTime];
+
+    if (skipBookingId) {
+      query += ` AND b.id != $4`;
+      params.push(skipBookingId);
+    }
+
+    const result = await pool.query(query, params);
+    res.json({ success: true, conflicts: result.rows });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getResources,
   createResource,
+  updateResource,
+  deleteResource,
   bookResource,
   getAvailability,
   approveBooking,
   getBookings,
+  checkConflicts,
 };

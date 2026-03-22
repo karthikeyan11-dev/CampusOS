@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuthStore } from '@/stores/auth.store';
 import { Zap, Eye, EyeOff, ArrowRight, Loader2 } from 'lucide-react';
+import { motion } from 'framer-motion';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -31,99 +32,109 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-cos-bg-primary flex">
-      {/* Ambient Effects */}
-      <div className="fixed inset-0 pointer-events-none">
-        <div className="absolute top-1/4 left-1/4 w-[500px] h-[500px] rounded-full bg-cos-primary/5 blur-[120px]" />
-        <div className="absolute bottom-1/4 right-1/4 w-[400px] h-[400px] rounded-full bg-cos-secondary/5 blur-[120px]" />
-      </div>
+    <div className="min-h-screen bg-cos-bg-primary flex flex-col lg:flex-row overflow-hidden">
+      {/* Background Decor */}
+      <div className="hero-glow top-0 left-[-200px]" />
+      <div className="hero-glow bottom-0 right-[-200px]" style={{ opacity: 0.1 }} />
+      <div className="absolute inset-0 grid-pattern pointer-events-none" />
 
-      {/* Left Panel - Branding */}
-      <div className="hidden lg:flex flex-1 items-center justify-center relative">
-        <div className="grid-pattern absolute inset-0 opacity-20" />
-        <div className="relative z-10 max-w-md px-12">
-          <div className="flex items-center gap-3 mb-8">
-            <div className="w-12 h-12 rounded-xl gradient-bg flex items-center justify-center">
-              <Zap className="w-6 h-6 text-white" />
+      {/* Left Section - Promo */}
+      <div className="hidden lg:flex flex-1 items-center justify-center p-12 relative z-10">
+        <motion.div 
+          initial={{ opacity: 0, x: -50 }}
+          animate={{ opacity: 1, x: 0 }}
+          className="max-w-md"
+        >
+          <div className="flex items-center gap-4 mb-12">
+            <div className="w-14 h-14 rounded-2xl gradient-bg flex items-center justify-center shadow-[0_0_30px_rgba(255,106,0,0.4)]">
+              <Zap className="w-7 h-7 text-white" />
             </div>
-            <span className="text-2xl font-bold">
+            <span className="text-4xl font-black tracking-tighter">
               Campus<span className="gradient-text">OS</span>
             </span>
           </div>
-          <h2 className="text-3xl font-bold mb-4">
-            Welcome back to your <span className="gradient-text">Smart Campus</span>
+          
+          <h2 className="text-6xl font-black leading-tight mb-6">
+            Everything <br />
+            <span className="gradient-text">Connected.</span>
           </h2>
-          <p className="text-cos-text-secondary leading-relaxed">
-            Access your dashboard to manage notifications, gate passes, complaints, and campus resources — all in one place.
+          <p className="text-cos-text-secondary text-xl font-medium leading-relaxed">
+            Your university portal, reimagined. Secure, fast, and intelligent.
           </p>
 
-          {/* Feature highlights */}
-          <div className="mt-10 space-y-4">
-            {['AI-powered notifications', 'Digital QR gate passes', 'Real-time analytics'].map((f, i) => (
-              <div key={i} className="flex items-center gap-3 text-sm text-cos-text-secondary">
-                <div className="w-1.5 h-1.5 rounded-full bg-cos-primary" />
-                <span>{f}</span>
-              </div>
-            ))}
+          <div className="mt-12 flex gap-4">
+             <div className="glass-card px-6 py-4 flex-1">
+               <div className="text-cos-primary font-bold mb-1">99.9%</div>
+               <div className="text-xs text-cos-text-muted uppercase tracking-widest font-bold">Uptime</div>
+             </div>
+             <div className="glass-card px-6 py-4 flex-1">
+               <div className="text-cos-primary font-bold mb-1">Instant</div>
+               <div className="text-xs text-cos-text-muted uppercase tracking-widest font-bold">Gate Pass</div>
+             </div>
           </div>
-        </div>
+        </motion.div>
       </div>
 
-      {/* Right Panel - Login Form */}
-      <div className="flex-1 flex items-center justify-center px-6 relative z-10">
-        <div className="w-full max-w-md">
-          {/* Mobile Logo */}
-          <div className="lg:hidden flex items-center gap-3 mb-8 justify-center">
-            <div className="w-10 h-10 rounded-xl gradient-bg flex items-center justify-center">
-              <Zap className="w-5 h-5 text-white" />
-            </div>
-            <span className="text-xl font-bold">
-              Campus<span className="gradient-text">OS</span>
-            </span>
-          </div>
-
-          <div className="glass-card p-8">
-            <h1 className="text-2xl font-bold mb-2">Sign In</h1>
-            <p className="text-sm text-cos-text-secondary mb-8">Enter your credentials to access your account</p>
+      {/* Right Section - Form */}
+      <div className="flex-1 flex items-center justify-center p-6 relative z-10">
+        <motion.div 
+          initial={{ opacity: 0, y: 30 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="w-full max-w-[450px]"
+        >
+          <div className="glass-card p-10 border-white/10 shadow-2xl relative overflow-hidden group">
+            {/* Spotlight effect */}
+            <div className="absolute -top-24 -right-24 w-48 h-48 bg-cos-primary/10 blur-[60px] rounded-full group-hover:bg-cos-primary/20 transition-colors" />
+            
+            <header className="mb-10 text-center lg:text-left">
+              <h1 className="text-3xl font-black mb-2">Welcome Back</h1>
+              <p className="text-cos-text-secondary font-medium">Continue to your campus dashboard</p>
+            </header>
 
             {error && (
-              <div className="mb-6 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+              <motion.div 
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                className="mb-8 p-4 rounded-xl bg-cos-danger/10 border border-cos-danger/20 text-cos-danger text-sm font-bold flex items-center gap-2"
+              >
+                <div className="w-1.5 h-1.5 rounded-full bg-cos-danger animate-pulse" />
                 {error}
-              </div>
+              </motion.div>
             )}
 
-            <form onSubmit={handleSubmit} className="space-y-5">
-              <div>
-                <label className="block text-sm font-medium text-cos-text-secondary mb-2">Email Address</label>
+            <form onSubmit={handleSubmit} className="space-y-6">
+              <div className="space-y-2">
+                <label className="text-xs font-bold uppercase tracking-widest text-cos-text-muted ml-1">Identity (Email)</label>
                 <input
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="input-field"
-                  placeholder="you@college.edu"
+                  className="input-field py-4 px-5 bg-white/5 border-white/10 focus:bg-white/10 transition-all font-medium"
+                  placeholder="name@college.edu"
                   required
-                  id="login-email"
                 />
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-cos-text-secondary mb-2">Password</label>
-                <div className="relative">
+              <div className="space-y-2">
+                <div className="flex justify-between items-center ml-1">
+                  <label className="text-xs font-bold uppercase tracking-widest text-cos-text-muted">Secret (Password)</label>
+                  <Link href="/forgot-password" className="text-[10px] uppercase font-bold text-cos-primary hover:opacity-80 transition-opacity">Reset Access</Link>
+                </div>
+                <div className="relative group">
                   <input
                     type={showPassword ? 'text' : 'password'}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="input-field pr-10"
+                    className="input-field py-4 px-5 pr-14 bg-white/5 border-white/10 focus:bg-white/10 transition-all font-medium"
                     placeholder="••••••••"
                     required
-                    id="login-password"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-cos-text-muted hover:text-cos-text-primary transition-colors"
+                    className="absolute right-4 top-1/2 -translate-y-1/2 text-cos-text-muted hover:text-cos-primary transition-colors"
                   >
-                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                   </button>
                 </div>
               </div>
@@ -131,34 +142,33 @@ export default function LoginPage() {
               <button
                 type="submit"
                 disabled={loading}
-                className="btn-primary w-full flex items-center justify-center gap-2 py-3 disabled:opacity-50"
-                id="login-submit"
+                className="btn-primary w-full py-4 text-sm font-black uppercase tracking-widest flex items-center justify-center gap-3 shadow-[0_10px_30px_rgba(255,106,0,0.3)] hover:shadow-[0_15px_40px_rgba(255,106,0,0.5)] transition-all mt-8"
               >
                 {loading ? (
-                  <Loader2 className="w-5 h-5 animate-spin" />
+                  <Loader2 className="w-6 h-6 animate-spin" />
                 ) : (
-                  <>Sign In <ArrowRight className="w-4 h-4" /></>
+                  <>Enter Dashboard <ArrowRight className="w-5 h-5" /></>
                 )}
               </button>
             </form>
 
-            <div className="mt-6 text-center text-sm text-cos-text-secondary">
-              Don&apos;t have an account?{' '}
-              <Link href="/register" className="text-cos-primary hover:underline font-medium">
-                Register here
-              </Link>
-            </div>
+            <footer className="mt-10 pt-8 border-t border-white/5 text-center">
+               <p className="text-sm text-cos-text-muted font-medium">
+                 New to CampusOS? {' '}
+                 <Link href="/register" className="text-cos-primary font-black hover:opacity-80 transition-opacity">Create Account</Link>
+               </p>
+            </footer>
           </div>
 
-          {/* Demo Credentials */}
-          <div className="mt-4 glass-card p-4">
-            <p className="text-xs text-cos-text-muted text-center mb-2">Demo Credentials</p>
-            <div className="flex items-center justify-center gap-4 text-xs">
-              <code className="bg-cos-bg-secondary px-2 py-1 rounded text-cos-primary">admin@campusos.edu</code>
-              <code className="bg-cos-bg-secondary px-2 py-1 rounded text-cos-primary">admin123</code>
-            </div>
+          {/* Quick Access Demo */}
+          <div className="mt-6 flex justify-center">
+             <div className="px-4 py-2 rounded-full bg-white/5 border border-white/5 text-[10px] font-bold text-cos-text-muted tracking-wide flex gap-3">
+               <span>DEMO: admin@campusos.edu</span>
+               <span className="text-white/20">|</span>
+               <span>admin123</span>
+             </div>
           </div>
-        </div>
+        </motion.div>
       </div>
     </div>
   );

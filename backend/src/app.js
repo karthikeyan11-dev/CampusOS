@@ -20,6 +20,15 @@ const departmentRoutes = require('./modules/departments/departments.routes');
 
 const app = express();
 
+// Correlation ID for tracing
+const { v4: uuidv4 } = require('uuid');
+app.use((req, res, next) => {
+  req.id = req.headers['x-correlation-id'] || uuidv4();
+  res.setHeader('x-correlation-id', req.id);
+  console.log(`[${req.method}] ${req.url}`);
+  next();
+});
+
 // ============================================
 // MIDDLEWARE
 // ============================================
@@ -44,18 +53,35 @@ app.use(morgan('dev'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Rate limiting
+// Default rate limiter
 const limiter = rateLimit({
   windowMs: config.rateLimit.windowMs,
   max: config.rateLimit.max,
   message: {
     success: false,
+    error_code: 'RATE_LIMIT_EXCEEDED',
     message: 'Too many requests. Please try again later.',
   },
   standardHeaders: true,
   legacyHeaders: false,
 });
 app.use('/api/', limiter);
+
+// Strict Rate Limiter for Auth & Scans
+const strictLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20, // 20 attempts
+  message: {
+    success: false,
+    error_code: 'STRICT_RATE_LIMIT',
+    message: 'Security alert: Too many attempts. Please wait 15 minutes.',
+  },
+});
+app.use('/api/auth/login', strictLimiter);
+app.use('/api/auth/register', strictLimiter);
+app.use('/api/gatepass/scan', strictLimiter);
+app.use('/api/gatepass/open', strictLimiter);
+app.use('/api/gatepass/close', strictLimiter);
 
 // Static files (uploads)
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
@@ -72,6 +98,8 @@ app.use('/api/resources', resourceRoutes);
 app.use('/api/lostfound', lostfoundRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/departments', departmentRoutes);
+app.use('/api/hostels', require('./modules/hostel/hostel.routes'));
+app.use('/api/governance', require('./modules/governance/governance.routes'));
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -132,34 +160,42 @@ app.use((err, req, res, next) => {
 
   res.status(err.status || 500).json({
     success: false,
+    error_code: err.code || 'INTERNAL_ERROR',
     message: config.nodeEnv === 'production'
       ? 'Internal server error.'
       : err.message,
+    details: config.nodeEnv === 'development' ? err.stack : undefined
   });
 });
 
 // ============================================
-// START SERVER
+// START SERVER (PHASE 10 VALIDATION)
 // ============================================
 
 const PORT = config.port;
 
-app.listen(PORT, () => {
-  console.log(`
-  ╔══════════════════════════════════════════╗
-  ║                                          ║
-  ║   🏫 CampusOS API Server                ║
-  ║                                          ║
-  ║   Port:        ${PORT}                      ║
-  ║   Environment: ${config.nodeEnv.padEnd(20)} ║
-  ║   Frontend:    ${config.frontendUrl.padEnd(20)} ║
-  ║                                          ║
-  ╚══════════════════════════════════════════╝
-  `);
+const startServer = async () => {
+  console.log('\n🚀 Starting CampusOS API Server (Development Mode)...');
+  
+  app.listen(PORT, () => {
+    console.log(`
+╔══════════════════════════════════════════╗
+║                                          ║
+║   🏫 CampusOS API Server                ║
+║                                          ║
+║   Port:        ${PORT}                      ║
+║   Environment: ${config.nodeEnv.padEnd(20)} ║
+║   Frontend:    ${config.frontendUrl.padEnd(20)} ║
+║                                          ║
+╚══════════════════════════════════════════╝
+    `);
 
-  // Start background scheduler for automated jobs
-  const { startScheduler } = require('./services/scheduler.service');
-  startScheduler();
-});
+    // Start Scheduler
+    const { startScheduler } = require('./services/scheduler.service');
+    startScheduler();
+  });
+};
+
+startServer();
 
 module.exports = app;

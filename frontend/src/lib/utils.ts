@@ -33,24 +33,28 @@ export function formatTime(time: string): string {
 
 export function getStatusColor(status: string): string {
   const colors: Record<string, string> = {
-    open: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
-    in_progress: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
-    resolved: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
-    closed: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
-    rejected: 'bg-red-500/20 text-red-400 border-red-500/30',
-    escalated: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
-    pending: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
-    approved: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
-    active: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
-    expired: 'bg-red-500/20 text-red-400 border-red-500/30',
-    completed: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
-    pending_faculty: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
-    pending_hod: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
-    pending_super_admin: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
-    published: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
-    pending_approval: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
+    open: 'bg-cos-primary/15 text-cos-primary border-cos-primary/30',
+    in_progress: 'bg-cos-warning/15 text-cos-warning border-cos-warning/30',
+    resolved: 'bg-cos-success/15 text-cos-success border-cos-success/30',
+    closed: 'bg-white/10 text-cos-text-muted border-white/20',
+    rejected: 'bg-cos-danger/15 text-cos-danger border-cos-danger/30',
+    escalated: 'bg-cos-danger/20 text-cos-danger border-cos-danger/40',
+    pending: 'bg-cos-warning/15 text-cos-warning border-cos-warning/30',
+    approved: 'bg-cos-success/15 text-cos-success border-cos-success/30',
+    active: 'bg-cos-primary/15 text-cos-primary border-cos-primary/30',
+    expired: 'bg-cos-danger/15 text-cos-danger border-cos-danger/30',
+    completed: 'bg-cos-success/15 text-cos-success border-cos-success/30',
+    exited: 'bg-cos-danger/15 text-cos-danger border-cos-danger/30',
+    pending_faculty: 'bg-cos-warning/15 text-cos-warning border-cos-warning/30',
+    mentor_approved: 'bg-cos-primary/15 text-cos-primary border-cos-primary/30',
+    hod_approved: 'bg-cos-primary/20 text-cos-primary border-cos-primary/40',
+    warden_approved: 'bg-cos-primary/25 text-cos-primary border-cos-primary/50',
+    published: 'bg-cos-success/15 text-cos-success border-cos-success/30',
+    pending_approval: 'bg-cos-warning/15 text-cos-warning border-cos-warning/30',
+    opened: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+    yet_to_be_closed: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
   };
-  return colors[status] || 'bg-gray-500/20 text-gray-400 border-gray-500/30';
+  return colors[status] || 'bg-white/10 text-cos-text-muted border-white/20';
 }
 
 export function getPriorityColor(priority: string): string {
@@ -78,14 +82,16 @@ export function truncate(str: string, length: number): string {
 
 export function getRoleBadgeColor(role: string): string {
   const colors: Record<string, string> = {
-    super_admin: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
-    department_admin: 'bg-blue-500/20 text-blue-300 border-blue-500/40',
-    faculty: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40',
-    student: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
-    security_staff: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
-    maintenance_staff: 'bg-orange-500/20 text-orange-300 border-orange-500/40',
+    super_admin: 'bg-cos-primary/20 text-cos-primary border-cos-primary/40',
+    department_admin: 'bg-cos-primary/15 text-cos-primary border-cos-primary/30',
+    faculty: 'bg-white/5 text-cos-text-primary border-white/10',
+    student: 'bg-white/5 text-cos-text-primary border-white/10',
+    security_staff: 'bg-cos-primary/10 text-cos-primary border-cos-primary/20',
+    maintenance_staff: 'bg-white/5 text-cos-text-muted border-white/10',
+    warden: 'bg-cos-primary/15 text-cos-primary border-cos-primary/30',
+    deputy_warden: 'bg-cos-primary/10 text-cos-primary border-cos-primary/20',
   };
-  return colors[role] || 'bg-gray-500/20 text-gray-300 border-gray-500/40';
+  return colors[role] || 'bg-white/5 text-cos-text-muted border-white/10';
 }
 
 export function formatRoleName(role: string): string {
@@ -96,6 +102,8 @@ export function formatRoleName(role: string): string {
     student: 'Student',
     security_staff: 'Security',
     maintenance_staff: 'Maintenance',
+    warden: 'Warden',
+    deputy_warden: 'Deputy Warden',
   };
   return names[role] || role;
 }

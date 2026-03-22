@@ -11,6 +11,24 @@ const getGroqClient = () => {
 };
 
 /**
+ * AI Retry Helper with Timeout (Task 4)
+ */
+const withRetry = async (fn, retries = 2, timeoutMs = 5000) => {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('AI Request Timeout')), timeoutMs)
+      );
+      return await Promise.race([fn(), timeoutPromise]);
+    } catch (error) {
+      if (i === retries) throw error;
+      console.warn(`AI Retry ${i+1}/${retries} failed: ${error.message}`);
+      await new Promise(r => setTimeout(r, 1000)); // wait before retry
+    }
+  }
+};
+
+/**
  * Summarize a notification for push messages
  */
 const summarizeNotification = async (content) => {
@@ -189,39 +207,41 @@ const verifyIDCard = async (imageUrl) => {
     const client = getGroqClient();
     if (!client) return null;
 
-    const completion = await client.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      messages: [
-        {
-          role: 'system',
-          content: `You are an AI specialized in extracting information from ID cards. 
+    return await withRetry(async () => {
+      const completion = await client.chat.completions.create({
+        model: 'llama-3.2-90b-vision-preview',
+        messages: [
+          {
+            role: 'system',
+            content: `You are an AI specialized in extracting information from ID cards. 
 Look at the text in the image and extract the following fields in JSON format:
 {
   "name": "full name of the person",
   "department": "department name",
-  "rollNumber": "roll number or ID number"
+  "rollNumber": "roll number or ID number",
+  "confidenceScore": 0.XX (estimate how clear the data is from 0 to 1)
 }
 If a field is not found, use null. Return ONLY the JSON object.`,
-        },
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: 'Extract information from this ID card image:' },
-            { type: 'image_url', image_url: { url: imageUrl } },
-          ],
-        },
-      ],
-      temperature: 0.1,
-      max_tokens: 200,
+          },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Extract information from this ID card image:' },
+              { type: 'image_url', image_url: { url: imageUrl } },
+            ],
+          },
+        ],
+        temperature: 0.1,
+        max_tokens: 200,
+      });
+
+      const responseText = completion.choices[0]?.message?.content || '';
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        return JSON.parse(jsonMatch[0]);
+      }
+      return null;
     });
-
-    const responseText = completion.choices[0]?.message?.content || '';
-    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
-    }
-
-    return null;
   } catch (error) {
     console.error('AI ID Verification error:', error.message);
     return null;
