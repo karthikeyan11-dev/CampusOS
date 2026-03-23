@@ -72,13 +72,11 @@ const getNotifications = async (req, res, next) => {
 
     let whereConditions = ["n.status = 'published'"];
     let params = [];
-    let paramCount = 0;
 
     // Filter by type
     if (type) {
-      paramCount++;
-      whereConditions.push(`n.type = $${paramCount}`);
       params.push(type);
+      whereConditions.push(`n.type = $${params.length}`);
     }
 
     // Filter by target
@@ -92,51 +90,55 @@ const getNotifications = async (req, res, next) => {
 
       whereConditions.push(`(
         n.target_type = 'all'
-        OR (n.target_type = 'department' AND n.target_department_id = $${paramCount + 1})
-        OR (n.target_type = 'batch' AND n.target_batch = $${paramCount + 2})
-        OR (n.target_type = 'class' AND n.target_class_id = $${paramCount + 3})
-        OR (n.target_type = 'hosteller' AND $${paramCount + 4} = 'hosteller')
-        OR (n.target_type = 'day_scholar' AND $${paramCount + 4} = 'day_scholar')
+        OR (n.target_type = 'department' AND n.target_department_id = $${params.length + 1})
+        OR (n.target_type = 'batch' AND n.target_batch = $${params.length + 2})
+        OR (n.target_type = 'class' AND n.target_class_id = $${params.length + 3})
+        OR (n.target_type = 'hosteller' AND $${params.length + 4} = 'hosteller')
+        OR (n.target_type = 'day_scholar' AND $${params.length + 4} = 'day_scholar')
       )`);
-      params.push(req.user.department_id, student.batch, student.class_id, student.residence_type);
-      paramCount += 4;
+      params.push(req.user.departmentId, student.batch, student.class_id, student.residence_type);
     } else if (req.user.role === ROLES.FACULTY) {
       whereConditions.push(`(
         n.target_type = 'all'
         OR n.target_type = 'faculty'
-        OR (n.target_type = 'department' AND n.target_department_id = $${paramCount + 1})
+        OR (n.target_type = 'department' AND n.target_department_id = $${params.length + 1})
       )`);
-      params.push(req.user.department_id);
-      paramCount++;
+      params.push(req.user.departmentId);
     }
 
     // Filter expired
     whereConditions.push("(n.expires_at IS NULL OR n.expires_at > NOW())");
 
-    const query = `
-      SELECT n.*, u.name as posted_by_name,
-             EXISTS(SELECT 1 FROM notification_reads nr WHERE nr.notification_id = n.id AND nr.user_id = $${paramCount + 1}) as is_read
-      FROM notifications n
-      JOIN users u ON n.posted_by = u.id
-      WHERE ${whereConditions.join(' AND ')}
-      ORDER BY n.is_pinned DESC, n.published_at DESC
-      LIMIT $${paramCount + 2} OFFSET $${paramCount + 3}
-    `;
+    // Capture filters count for total count query
+    const filterParams = [...params];
+    const filterWhere = whereConditions.join(' AND ').trim();
 
-    paramCount++;
-    params.push(req.user.id);
-    paramCount++;
-    params.push(parseInt(limit));
-    paramCount++;
-    params.push(offset);
+    // 🚀 PHASE 10: SYNCHRONIZED PAGINATION QUERY
+    const query = [
+      "SELECT n.*, u.name as posted_by_name,",
+      `EXISTS(SELECT 1 FROM notification_reads nr WHERE nr.notification_id = n.id AND nr.user_id = $${params.length + 1}) as is_read`,
+      "FROM notifications n",
+      "JOIN users u ON n.posted_by = u.id",
+      "WHERE " + filterWhere,
+      "ORDER BY n.is_pinned DESC, n.published_at DESC",
+      `LIMIT $${params.length + 2} OFFSET $${params.length + 3}`
+    ].join(' ').replace(/\s+/g, ' ');
 
-    const result = await pool.query(query, params);
+    console.log('[TELEMETRY] Hot-Patch Initialized: Notification API sync confirmed.');
+    console.log('[DEBUG] Query Payload:', { sql: query, params: [...params, req.user.id, parseInt(limit), offset] });
 
-    // Get total count
-    const countResult = await pool.query(
-      `SELECT COUNT(*) FROM notifications n WHERE ${whereConditions.slice(0, -0).join(' AND ')}`,
-      params.slice(0, -2)
-    );
+    const result = await pool.query(query, [
+      ...params,
+      req.user.id,
+      parseInt(limit),
+      offset
+    ]);
+
+    // 🚀 PHASE 10: SYNCHRONIZED COUNT QUERY
+    const countQuery = `SELECT COUNT(*) FROM notifications n WHERE ${filterWhere}`.replace(/\s+/g, ' ');
+    console.log('[DEBUG] Count Payload:', { sql: countQuery, params: filterParams });
+    
+    const countResult = await pool.query(countQuery, filterParams);
 
     res.json({
       success: true,

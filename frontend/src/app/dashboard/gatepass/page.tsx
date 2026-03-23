@@ -59,8 +59,9 @@ export default function GatePassPage() {
 
         if (statusTab === 'all') return true;
         if (statusTab === 'pending_faculty') return gp.status === 'pending_faculty';
-        if (statusTab === 'pending_hod') return gp.status === 'mentor_approved';
+        if (statusTab === 'pending_hod') return gp.status === 'mentor_approved' || (gp.status === 'waiting' && gp.pass_type === 'faculty');
         if (statusTab === 'pending_warden') return gp.status === 'hod_approved' && gp.residence_type === 'hosteller';
+        if (statusTab === 'pending_admin') return (gp.status === 'hod_approved' && (gp.pass_type === 'faculty' || gp.pass_type === 'day_scholar')) || (gp.status === 'waiting' && (gp.pass_type === 'hod' || gp.pass_type === 'warden'));
         
         if (statusTab === 'approved') {
           if (category === 'day_scholar') return gp.status === 'hod_approved' || gp.status === 'approved';
@@ -161,14 +162,15 @@ export default function GatePassPage() {
       { id: 'pending_hod', label: 'Pending HOD' }
     ];
     const wardenTab = category === 'hosteller' ? [{ id: 'pending_warden', label: 'Pending Warden' }] : [];
+    const adminTab = user?.role === 'super_admin' ? [{ id: 'pending_admin', label: 'Pending Admin' }] : [];
     const statusTabs = [
       { id: 'approved', label: 'Approved' },
       { id: 'opened', label: 'Opened' },
       { id: 'closed', label: 'Closed' },
       { id: 'expired', label: 'Expired' }
     ];
-    return [...common, ...wardenTab, ...statusTabs];
-  }, [category]);
+    return [...common, ...wardenTab, ...adminTab, ...statusTabs];
+  }, [category, user?.role]);
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -313,8 +315,9 @@ export default function GatePassPage() {
                  </button>
                  {canApprove && (
                    (statusTab === 'pending_faculty' && gp.status === 'pending_faculty') ||
-                   (statusTab === 'pending_hod' && gp.status === 'mentor_approved') ||
-                   (statusTab === 'pending_warden' && gp.status === 'hod_approved')
+                   (statusTab === 'pending_hod' && (gp.status === 'mentor_approved' || gp.status === 'waiting')) ||
+                   (statusTab === 'pending_warden' && gp.status === 'hod_approved') ||
+                   (statusTab === 'pending_admin' && (gp.status === 'hod_approved' || gp.status === 'waiting'))
                  ) && (
                    <div className="flex gap-2 flex-[2]">
                     <button onClick={() => handleApprove(gp.id, 'approve')} className="flex-1 btn-primary py-2 text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2">

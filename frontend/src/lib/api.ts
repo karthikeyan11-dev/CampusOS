@@ -31,38 +31,56 @@ api.interceptors.response.use(
   async (error) => {
     const originalRequest = error.config;
 
-    if (error.response?.status === 401 && error.response?.data?.code === 'TOKEN_EXPIRED' && !originalRequest._retry) {
-      originalRequest._retry = true;
+    // Standardized check for error_code as returned by backend authMiddleware
+    const errorCode = error.response?.data?.error_code || error.response?.data?.code;
 
-      try {
-        const refreshToken = localStorage.getItem('refreshToken');
-        if (!refreshToken) throw new Error('No refresh token');
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      // Branch A: Primary Token Expired -> Attempt Refresh
+      if (errorCode === 'TOKEN_EXPIRED') {
+        originalRequest._retry = true;
+        try {
+          console.log('[AUTH] Syncing identity: Token expired. Attempting refresh...');
+          const refreshToken = localStorage.getItem('refreshToken');
+          if (!refreshToken) throw new Error('No refresh token');
 
-        const response = await axios.post(`${API_BASE_URL}/auth/refresh`, { refreshToken });
-        const { accessToken, refreshToken: newRefreshToken } = response.data.data;
+          const response = await axios.post(`${API_BASE_URL}/auth/refresh`, { refreshToken });
+          const { accessToken, refreshToken: newRefreshToken } = response.data.data;
 
-        localStorage.setItem('accessToken', accessToken);
-        localStorage.setItem('refreshToken', newRefreshToken);
+          localStorage.setItem('accessToken', accessToken);
+          localStorage.setItem('refreshToken', newRefreshToken);
+          document.cookie = `campusos_token=${accessToken}; path=/; max-age=86400; SameSite=Lax`;
 
-        originalRequest.headers.Authorization = `Bearer ${accessToken}`;
-        return api(originalRequest);
-      } catch (refreshError) {
-        localStorage.removeItem('accessToken');
-        localStorage.removeItem('refreshToken');
-        localStorage.removeItem('user');
-        
-        // KILL COOKIES to stop Middleware Loops
-        document.cookie = 'campusos_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
-        document.cookie = 'campusos_role=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+          // Retry with hardened header setter
+          if (originalRequest.headers.set) {
+            originalRequest.headers.set('Authorization', `Bearer ${accessToken}`);
+          } else {
+            originalRequest.headers['Authorization'] = `Bearer ${accessToken}`;
+          }
+          return api(originalRequest);
+        } catch (refreshError) {
+          console.warn('[AUTH] Session sync failed. Cleaning up identity shards.');
+          handleLogout();
+          return Promise.reject(refreshError);
+        }
+      }
 
-        window.location.href = '/login';
-        return Promise.reject(refreshError);
+      // Branch B: Generic Unauthorized or Refresh Failure -> Logout
+      if (errorCode === 'UNAUTHORIZED' || errorCode === 'INVALID_TOKEN' || errorCode === 'USER_NOT_FOUND') {
+        handleLogout();
       }
     }
 
     return Promise.reject(error);
   }
 );
+
+const handleLogout = () => {
+  localStorage.removeItem('accessToken');
+  localStorage.removeItem('refreshToken');
+  localStorage.removeItem('campusos-auth-storage');
+  document.cookie = 'campusos_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+  window.location.href = '/login';
+};
 
 export default api;
 
@@ -186,8 +204,9 @@ export const governanceAPI = {
   deleteHostel: (id: string) => api.delete(`/governance/hostels/${id}`),
 
   // Mappings
+  getMappingSummary: () => api.get('/governance/mappings/summary'),
   getFacultyForMapping: () => api.get('/governance/mappings/faculty'),
-  createHostelMapping: (data: { hostelId: string, wardenId: string }) => 
+  createHostelMapping: (data: { hostelId: string, wardenId: string, deputyWardenId?: string }) => 
     api.post('/governance/mappings/hostel', data),
 
   // Lookups (High Performance)

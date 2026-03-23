@@ -7,7 +7,7 @@ import { formatDateTime, getRoleBadgeColor, formatRoleName, getStatusColor } fro
 import { useSearchParams } from 'next/navigation';
 import { 
   Users, Loader2, CheckCircle2, XCircle, Clock, Shield, 
-  Search, List, Map, UserPlus, Trash2, Building2 
+  Search, List, Map, UserPlus, Trash2, Building2, Plus
 } from 'lucide-react';
 
 export default function UsersPage() {
@@ -23,6 +23,11 @@ export default function UsersPage() {
   const [faculty, setFaculty] = useState<any[]>([]);
   const [departments, setDepartments] = useState<any[]>([]);
   const [hostels, setHostels] = useState<any[]>([]);
+  const [mappingSummary, setMappingSummary] = useState<any>({
+    departments: [],
+    hostels: [],
+    classes: []
+  });
   
   // Filter for Directory
   const [roleFilter, setRoleFilter] = useState('all');
@@ -41,7 +46,8 @@ export default function UsersPage() {
     departmentId: '',
     hodId: '',
     hostelId: '',
-    wardenId: '' // NEW: LINKING WARDEN TO HOSTEL
+    wardenId: '',
+    deputyWardenId: ''
   });
 
   useEffect(() => {
@@ -57,15 +63,17 @@ export default function UsersPage() {
           setAllUsers(res.data.data || []);
         }
       } else if (mode === 'mappings') {
-        const [facRes, deptRes, hostelRes] = await Promise.all([
+        const [facRes, deptRes, hostelRes, summaryRes] = await Promise.all([
           authAPI.getFacultyMapping(),
           governanceAPI.lookupDepartments(),
-          governanceAPI.lookupHostels()
+          governanceAPI.lookupHostels(),
+          governanceAPI.getMappingSummary()
         ]);
         
         if (facRes.data?.success) setFaculty(facRes.data.data || []);
         if (deptRes.data?.success) setDepartments(deptRes.data.data || []);
         if (hostelRes.data?.success) setHostels(hostelRes.data.data || []);
+        if (summaryRes.data?.success) setMappingSummary(summaryRes.data.data || { departments: [], hostels: [], classes: [] });
       }
     } catch (err: any) {
       console.error('Governance Data Fetch Error:', err);
@@ -112,14 +120,30 @@ export default function UsersPage() {
       } else if (mappingForm.type === 'hostel') {
         await governanceAPI.createHostelMapping({
           hostelId: mappingForm.hostelId,
-          wardenId: mappingForm.wardenId
+          wardenId: mappingForm.wardenId,
+          deputyWardenId: mappingForm.deputyWardenId
         });
       }
       setShowMappingModal(false);
-      alert('Mapping updated successfully.');
+      loadData();
+      alert('Institutional mapping synchronized.');
     } catch (err: any) {
       alert(err.response?.data?.message || 'Mapping failed');
     }
+  };
+
+  const handleEditMapping = (type: string, item: any) => {
+    setMappingForm({
+      type: type as any,
+      className: type === 'class' ? item.entity_name : '',
+      mentorId: type === 'class' ? item.mentor_id : '',
+      departmentId: (type === 'class' || type === 'department') ? (item.department_id || item.id) : '',
+      hodId: type === 'department' ? item.hod_id : '',
+      hostelId: type === 'hostel' ? item.id : '',
+      wardenId: type === 'hostel' ? item.warden_id : '',
+      deputyWardenId: type === 'hostel' ? item.deputy_warden_id : ''
+    });
+    setShowMappingModal(true);
   };
 
   return (
@@ -175,19 +199,75 @@ export default function UsersPage() {
           {loading ? (
             <div className="flex justify-center py-20"><Loader2 className="w-10 h-10 animate-spin text-cos-primary" /></div>
           ) : mode === 'mappings' ? (
-             <div className="grid grid-cols-1 md:grid-cols-2 gap-8 py-10">
-                {/* ... existing mappings UI ... */}
-                <div className="text-center p-12 bg-white/5 rounded-3xl border border-dashed border-white/10">
-                  <GraduationCap className="w-12 h-12 text-cos-primary/30 mx-auto mb-4" />
-                  <h4 className="font-bold text-cos-text-primary">Academic Assignments</h4>
-                  <p className="text-xs text-cos-text-secondary mt-2">Mappings for Class Mentors and HODs</p>
-                  <div className="mt-8 text-[10px] text-cos-text-muted font-bold uppercase tracking-[0.2em]">Active Relationships via Config</div>
+             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 py-10">
+                {/* Department HOD Mappings */}
+                <div className="space-y-4">
+                   <h3 className="text-[11px] font-black uppercase tracking-[0.2em] text-orange-500/50 flex items-center gap-3">
+                      <Building2 className="w-3 h-3" /> Executive Depts
+                   </h3>
+                   <div className="space-y-4">
+                      {mappingSummary.departments.map((m: any) => (
+                         <div key={m.id} className="glass-card p-6 border-white/5 hover:border-cos-primary/30 transition-all group">
+                            <div className="flex justify-between items-start mb-4">
+                               <div className="w-10 h-10 rounded-2xl bg-orange-500/10 flex items-center justify-center text-orange-500 font-black italic">D</div>
+                               <button onClick={() => handleEditMapping('department', m)} className="p-2 rounded-xl bg-white/5 hover:bg-zinc-900 text-white/20 hover:text-white transition-all"><Plus className="w-4 h-4 rotate-0" /></button>
+                            </div>
+                            <h4 className="text-sm font-black text-white italic truncate uppercase">{m.entity_name}</h4>
+                            <div className="mt-4 pt-4 border-t border-white/5">
+                               <p className="text-[9px] font-black uppercase text-cos-text-muted tracking-widest mb-1 italic">Head of Department</p>
+                               <p className="text-xs font-black text-orange-500 truncate uppercase">{m.personnel_name || 'NOT ASSIGNED'}</p>
+                            </div>
+                         </div>
+                      ))}
+                      {mappingSummary.departments.length === 0 && <p className="text-[10px] text-white/10 font-black uppercase text-center py-10">No departments configured</p>}
+                   </div>
                 </div>
-                <div className="text-center p-12 bg-white/5 rounded-3xl border border-dashed border-white/10">
-                  <Shield className="w-12 h-12 text-emerald-400/30 mx-auto mb-4" />
-                  <h4 className="font-bold text-cos-text-primary">Operations Mappings</h4>
-                  <p className="text-xs text-cos-text-secondary mt-2">Warden and Administrative assignments</p>
-                  <div className="mt-8 text-[10px] text-cos-text-muted font-bold uppercase tracking-[0.2em]">Automated based on Resource IDs</div>
+
+                {/* Operational Hostel Mappings */}
+                <div className="space-y-4">
+                   <h3 className="text-[11px] font-black uppercase tracking-[0.2em] text-emerald-500/50 flex items-center gap-3">
+                      <Map className="w-3 h-3" /> Residential Blocks
+                   </h3>
+                   <div className="space-y-4">
+                      {mappingSummary.hostels.map((m: any) => (
+                         <div key={m.id} className="glass-card p-6 border-white/5 hover:border-emerald-500/30 transition-all group">
+                            <div className="flex justify-between items-start mb-4">
+                               <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 flex items-center justify-center text-emerald-500 font-black italic">R</div>
+                               <button onClick={() => handleEditMapping('hostel', m)} className="p-2 rounded-xl bg-white/5 hover:bg-zinc-900 text-white/20 hover:text-white transition-all"><Plus className="w-4 h-4 rotate-0" /></button>
+                            </div>
+                            <h4 className="text-sm font-black text-white italic truncate uppercase">{m.entity_name}</h4>
+                            <div className="mt-4 pt-4 border-t border-white/5">
+                               <p className="text-[9px] font-black uppercase text-cos-text-muted tracking-widest mb-1 italic">Block Warden</p>
+                               <p className="text-xs font-black text-emerald-500 truncate uppercase">{m.personnel_name || 'NOT ASSIGNED'}</p>
+                            </div>
+                         </div>
+                      ))}
+                      {mappingSummary.hostels.length === 0 && <p className="text-[10px] text-white/10 font-black uppercase text-center py-10">No hostels configured</p>}
+                   </div>
+                </div>
+
+                {/* Academic Class Mappings */}
+                <div className="space-y-4">
+                   <h3 className="text-[11px] font-black uppercase tracking-[0.2em] text-blue-500/50 flex items-center gap-3">
+                      <List className="w-3 h-3" /> Academic Classes
+                   </h3>
+                   <div className="space-y-4">
+                      {mappingSummary.classes.map((m: any) => (
+                         <div key={m.id} className="glass-card p-6 border-white/5 hover:border-blue-500/30 transition-all group">
+                            <div className="flex justify-between items-start mb-4">
+                               <div className="w-10 h-10 rounded-2xl bg-blue-500/10 flex items-center justify-center text-blue-500 font-black italic">C</div>
+                               <button onClick={() => handleEditMapping('class', m)} className="p-2 rounded-xl bg-white/5 hover:bg-zinc-900 text-white/20 hover:text-white transition-all"><Plus className="w-4 h-4 rotate-0" /></button>
+                            </div>
+                            <h4 className="text-sm font-black text-white italic truncate uppercase">{m.entity_name}</h4>
+                            <p className="text-[9px] text-white/20 font-black italic mt-1">{m.parent_name}</p>
+                            <div className="mt-4 pt-4 border-t border-white/5">
+                               <p className="text-[9px] font-black uppercase text-cos-text-muted tracking-widest mb-1 italic">Faculty Mentor</p>
+                               <p className="text-xs font-black text-blue-500 truncate uppercase">{m.personnel_name || 'NOT ASSIGNED'}</p>
+                            </div>
+                         </div>
+                      ))}
+                      {mappingSummary.classes.length === 0 && <p className="text-[10px] text-white/10 font-black uppercase text-center py-10">No classes mapped</p>}
+                   </div>
                 </div>
              </div>
           ) : (
@@ -357,17 +437,26 @@ export default function UsersPage() {
                        </select>
                        {hostels.length === 0 && <p className="text-[9px] text-orange-500 font-bold uppercase tracking-widest mt-2">Create Residential Blocks in Governance Hub first.</p>}
                     </div>
-                    <div className="space-y-2">
-                       <label className="text-[10px] font-black uppercase tracking-widest text-cos-text-muted ml-1">Assigned Warden</label>
-                       <select className="orange-select w-full" value={mappingForm.wardenId} onChange={e => setMappingForm(p => ({ ...p, wardenId: e.target.value }))} required>
-                          <option value="">Select Personnel...</option>
-                          {/* Filter for Warden designations if possible, else show relevant faculty */}
-                          {faculty
-                            .filter(f => ['Warden', 'Deputy Warden', 'Staff'].includes(f.designation) || f.role === 'warden' || f.role === 'deputy_warden')
-                            .map(f => <option key={f.id} value={f.id}>{f.name} ({f.designation || f.role})</option>)}
-                       </select>
-                       <p className="text-[8px] text-cos-text-muted uppercase font-bold tracking-widest mt-2 pl-1">Only verified faculty with Warden tier enabled.</p>
-                    </div>
+                     <div className="space-y-4">
+                        <div className="space-y-2">
+                           <label className="text-[10px] font-black uppercase tracking-widest text-cos-text-muted ml-1">Assigned Warden</label>
+                           <select className="orange-select w-full" value={mappingForm.wardenId} onChange={e => setMappingForm(p => ({ ...p, wardenId: e.target.value }))} required>
+                              <option value="">Select Personnel...</option>
+                              {faculty
+                                .filter(f => f.role === 'warden' || f.role === 'deputy_warden' || f.designation === 'Warden')
+                                .map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                           </select>
+                        </div>
+                        <div className="space-y-2">
+                           <label className="text-[10px] font-black uppercase tracking-widest text-cos-text-muted ml-1">Deputy Warden</label>
+                           <select className="orange-select w-full" value={mappingForm.deputyWardenId} onChange={e => setMappingForm(p => ({ ...p, deputyWardenId: e.target.value }))}>
+                              <option value="">-- No Deputy Warden --</option>
+                              {faculty
+                                .filter(f => f.role === 'deputy_warden' || f.role === 'warden' || f.designation === 'Deputy Warden')
+                                .map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                           </select>
+                        </div>
+                     </div>
                   </>
                 )}
 

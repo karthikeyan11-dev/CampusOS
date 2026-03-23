@@ -301,8 +301,22 @@ const refreshAccessToken = async (req, res, next) => {
   try {
     const { refreshToken } = req.body;
 
+    if (!refreshToken) {
+      return res.status(401).json({ 
+        success: false, 
+        error_code: 'REFRESH_TOKEN_MISSING',
+        message: 'Refresh token required.' 
+      });
+    }
+
     // Verify refresh token
-    const decoded = jwt.verify(refreshToken, config.jwt.refreshSecret);
+    let decoded;
+    try {
+      decoded = jwt.verify(refreshToken, config.jwt.refreshSecret);
+    } catch (err) {
+      const error_code = err.name === 'TokenExpiredError' ? 'REFRESH_TOKEN_EXPIRED' : 'INVALID_REFRESH_TOKEN';
+      return res.status(401).json({ success: false, error_code, message: 'Session expired. Please log in again.' });
+    }
 
     // Check if token matches stored token
     const result = await pool.query(
@@ -311,7 +325,11 @@ const refreshAccessToken = async (req, res, next) => {
     );
 
     if (result.rows.length === 0 || result.rows[0].refresh_token !== refreshToken) {
-      return res.status(401).json({ success: false, message: 'Invalid refresh token.' });
+      return res.status(401).json({ 
+        success: false, 
+        error_code: 'REFRESH_TOKEN_MISMATCH',
+        message: 'Security breach: Session invalid.' 
+      });
     }
 
     const user = result.rows[0];
@@ -325,9 +343,6 @@ const refreshAccessToken = async (req, res, next) => {
       data: tokens,
     });
   } catch (error) {
-    if (error.name === 'TokenExpiredError') {
-      return res.status(401).json({ success: false, message: 'Refresh token expired. Please login again.' });
-    }
     next(error);
   }
 };
@@ -451,7 +466,7 @@ const approveUser = async (req, res, next) => {
         return res.status(403).json({ success: false, message: 'You only have permission to approve students.' });
       }
       // Must be from the same department
-      if (targetUser.department_id !== req.user.department_id) {
+      if (targetUser.department_id !== req.user.departmentId) {
         return res.status(403).json({ success: false, message: 'You can only approve users from your own department.' });
       }
     }
@@ -471,6 +486,10 @@ const approveUser = async (req, res, next) => {
 
     // Send approval email
     await sendApprovalEmail(user.email, user.name, status);
+
+    // ⚡ INVALIDATE CACHE: Approvals affect metrics and lists
+    await redisService.invalidatePattern('governance:*');
+    await redisService.invalidatePattern('analytics:*');
 
     res.json({
       success: true,
@@ -554,6 +573,11 @@ const promoteUser = async (req, res, next) => {
         [role, id]
       );
       if (result.rows.length === 0) return res.status(404).json({ success: false, message: 'User not found.' });
+      
+      // ⚡ INVALIDATE CACHE: Role change affects navigation and mapping
+      await redisService.invalidatePattern('governance:*');
+      await redisService.invalidatePattern('analytics:*');
+
       return res.json({ success: true, message: 'User role updated.', data: result.rows[0] });
     }
 
@@ -570,14 +594,18 @@ const promoteUser = async (req, res, next) => {
  * POST /auth/assignments/class
  */
 const updateClassAssignment = async (req, res, next) => {
+  const client = await pool.connect();
   try {
     const { className, mentorId, departmentId } = req.body;
     
-    // Verify entities
-    const deptCheck = await pool.query('SELECT name FROM departments WHERE id = $1', [departmentId]);
+    // 1. Verify entities
+    const deptCheck = await client.query('SELECT name FROM departments WHERE id = $1', [departmentId]);
     if (deptCheck.rows.length === 0) return res.status(404).json({ success: false, message: 'Department not found.' });
 
-    const result = await pool.query(
+    await client.query('BEGIN'); // 🚀 START TRANSACTION
+    
+    // 2. Insert/Update into assignments log
+    const result = await client.query(
       `INSERT INTO class_assignments (class_name, mentor_id, department_id)
        VALUES ($1, $2, $3)
        ON CONFLICT (class_name) DO UPDATE 
@@ -586,12 +614,35 @@ const updateClassAssignment = async (req, res, next) => {
       [className, mentorId, departmentId]
     );
 
-    // Sync mentor's department membership
-    await pool.query('UPDATE users SET department_id = $1 WHERE id = $2', [departmentId, mentorId]);
+    // 3. Sync mentor's department membership
+    await client.query('UPDATE users SET department_id = $1 WHERE id = $2', [departmentId, mentorId]);
+
+    // 4. Sync physical classes table
+    const classResult = await client.query(
+      'UPDATE classes SET faculty_advisor_id = $1 WHERE name = $2 AND department_id = $3 RETURNING id',
+      [mentorId, className, departmentId]
+    );
+
+    // 5. Atomic Batch Sync: Update all students in this class with the new mentor handle
+    if (classResult.rows.length > 0) {
+      const classId = classResult.rows[0].id;
+      await client.query(
+        'UPDATE students SET mentor_id = $1, department_id = $2, updated_at = NOW() WHERE class_id = $3',
+        [mentorId, departmentId, classId]
+      );
+    }
+
+    await client.query('COMMIT'); // 🚀 FINALIZE
+    
+    // ⚡ INVALIDATE CACHE
+    await redisService.invalidatePattern('governance:*');
 
     res.json({ success: true, data: result.rows[0] });
   } catch (error) {
+    await client.query('ROLLBACK'); // 🚒 SAFETY RECOVERY
     next(error);
+  } finally {
+    client.release(); // 🔋 POOL RECYCLING
   }
 };
 
@@ -599,15 +650,19 @@ const updateClassAssignment = async (req, res, next) => {
  * POST /auth/assignments/department
  */
 const updateDepartmentAssignment = async (req, res, next) => {
+  const client = await pool.connect();
   try {
     const { departmentId, hodId } = req.body;
     
-    // Verify department
-    const deptCheck = await pool.query('SELECT name FROM departments WHERE id = $1', [departmentId]);
+    // 1. Verify department
+    const deptCheck = await client.query('SELECT name FROM departments WHERE id = $1', [departmentId]);
     if (deptCheck.rows.length === 0) return res.status(404).json({ success: false, message: 'Department not found.' });
     const deptName = deptCheck.rows[0].name;
 
-    const result = await pool.query(
+    await client.query('BEGIN'); // 🚀 START TRANSACTION
+
+    // 2. Update assignments trace
+    const result = await client.query(
       `INSERT INTO department_assignments (dept_name, hod_id, department_id)
        VALUES ($1, $2, $3)
        ON CONFLICT (dept_name) DO UPDATE 
@@ -616,13 +671,22 @@ const updateDepartmentAssignment = async (req, res, next) => {
       [deptName, hodId, departmentId]
     );
 
-    // Sync HOD's department membership and designation
-    await pool.query('UPDATE users SET department_id = $1 WHERE id = $2', [departmentId, hodId]);
-    await pool.query('UPDATE departments SET hod_id = $1 WHERE id = $2', [hodId, departmentId]);
+    // 3. Sync HOD associations across multiple tables
+    await client.query('UPDATE users SET department_id = $1 WHERE id = $2', [departmentId, hodId]);
+    await client.query('UPDATE departments SET hod_id = $1 WHERE id = $2', [hodId, departmentId]);
     
+    await client.query('COMMIT'); // 🚀 FINALIZE
+
+    // ⚡ INVALIDATE CACHE
+    await redisService.invalidatePattern('governance:*');
+    await redisService.invalidatePattern('analytics:*');
+
     res.json({ success: true, data: result.rows[0] });
   } catch (error) {
+    await client.query('ROLLBACK'); // 🚒 SAFETY RECOVERY
     next(error);
+  } finally {
+    client.release(); // 🔋 POOL RECYCLING
   }
 };
 

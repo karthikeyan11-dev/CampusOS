@@ -53,35 +53,33 @@ app.use(morgan('dev'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Default rate limiter
-const limiter = rateLimit({
+// 🚩 PHASE 10: Mandatory Redis Rate Limiter
+const redisRateLimiter = require('./middleware/rate-limiter.middleware');
+
+const apiLimiter = redisRateLimiter({
   windowMs: config.rateLimit.windowMs,
   max: config.rateLimit.max,
-  message: {
-    success: false,
-    error_code: 'RATE_LIMIT_EXCEEDED',
-    message: 'Too many requests. Please try again later.',
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
+  message: 'Institutional API rate limit exceeded. Layer stabilized.'
 });
-app.use('/api/', limiter);
 
-// Strict Rate Limiter for Auth & Scans
-const strictLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 20, // 20 attempts
-  message: {
-    success: false,
-    error_code: 'STRICT_RATE_LIMIT',
-    message: 'Security alert: Too many attempts. Please wait 15 minutes.',
-  },
+const authLimiter = redisRateLimiter({
+  windowMs: 15 * 60 * 1000, 
+  max: 10,
+  message: 'Too many auth attempts. Identity Hub locked for 15 minutes.'
 });
-app.use('/api/auth/login', strictLimiter);
-app.use('/api/auth/register', strictLimiter);
-app.use('/api/gatepass/scan', strictLimiter);
-app.use('/api/gatepass/open', strictLimiter);
-app.use('/api/gatepass/close', strictLimiter);
+
+const gatepassLimiter = redisRateLimiter({
+  windowMs: 1 * 60 * 1000,
+  max: 30,
+  message: 'Gatepass scanning burst detected. Throttling active.'
+});
+
+app.use('/api', apiLimiter);
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/register', authLimiter);
+app.use('/api/gatepass/scan', gatepassLimiter);
+app.use('/api/gatepass/open', gatepassLimiter);
+app.use('/api/gatepass/close', gatepassLimiter);
 
 // Static files (uploads)
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
@@ -175,10 +173,15 @@ app.use((err, req, res, next) => {
 const PORT = config.port;
 
 const startServer = async () => {
-  console.log('\n🚀 Starting CampusOS API Server (Development Mode)...');
-  
-  app.listen(PORT, () => {
-    console.log(`
+  try {
+    console.log('\n🚀 Starting CampusOS API Server (Development Mode)...');
+    
+    // 🚩 PHASE 10: Mandatory Redis Synchronization
+    const { initRedis } = require('./services/redis.service');
+    await initRedis();
+    
+    app.listen(PORT, () => {
+      console.log(`
 ╔══════════════════════════════════════════╗
 ║                                          ║
 ║   🏫 CampusOS API Server                ║
@@ -186,14 +189,19 @@ const startServer = async () => {
 ║   Port:        ${PORT}                      ║
 ║   Environment: ${config.nodeEnv.padEnd(20)} ║
 ║   Frontend:    ${config.frontendUrl.padEnd(20)} ║
+║   Redis:       Connected (Mandatory)      ║
 ║                                          ║
 ╚══════════════════════════════════════════╝
-    `);
+      `);
 
-    // Start Scheduler
-    const { startScheduler } = require('./services/scheduler.service');
-    startScheduler();
-  });
+      // Start Scheduler
+      const { startScheduler } = require('./services/scheduler.service');
+      startScheduler();
+    });
+  } catch (err) {
+    console.error('🛑 [FATAL] Server initialization failed:', err.message);
+    process.exit(1);
+  }
 };
 
 startServer();

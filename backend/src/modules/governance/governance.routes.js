@@ -27,6 +27,7 @@ router.patch('/hostels/:id', governanceController.updateHostel);
 router.delete('/hostels/:id', governanceController.deleteHostel);
 
 // Mapping Operations
+router.get('/mappings/summary', governanceController.getMappingSummary);
 router.get('/mappings/faculty', governanceController.getFacultyForMapping);
 router.post('/mappings/hostel', governanceController.createHostelMapping);
 

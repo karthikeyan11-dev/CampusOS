@@ -141,6 +141,7 @@ const expireUnusedGatePasses = async () => {
  * Rule: 24 hours before event_date
  */
 const sendNotificationReminders = async () => {
+  /*
   try {
     const result = await pool.query(
       `SELECT * FROM notifications 
@@ -169,6 +170,7 @@ const sendNotificationReminders = async () => {
   } catch (error) {
     console.error('Notification reminder job error:', error.message);
   }
+  */
 };
 
 /**
