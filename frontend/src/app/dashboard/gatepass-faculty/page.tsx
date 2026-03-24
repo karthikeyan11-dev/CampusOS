@@ -111,7 +111,7 @@ export default function FacultyGatePassPage() {
           </h2>
           <p className="text-xs text-cos-text-secondary font-bold uppercase tracking-widest mt-1">Personnel Mobility Engine</p>
         </div>
-        {!isAdmin && (
+        {user?.role !== 'super_admin' && (
           <button onClick={() => setShowCreate(true)} className="btn-primary px-5 py-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest">
             <Plus className="w-4 h-4" /> New Request
           </button>
