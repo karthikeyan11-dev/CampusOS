@@ -7,7 +7,7 @@ const redisService = require('../services/redis.service');
 const redisRateLimiter = (options = { windowMs: 15 * 60 * 1000, max: 100, message: 'Too many requests.' }) => {
   return async (req, res, next) => {
     try {
-      const client = redisService.getRedisClient();
+      const client = await redisService.getRedisClient();
       const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
       const key = `ratelimit:${ip}:${req.baseUrl || 'global'}`;
 

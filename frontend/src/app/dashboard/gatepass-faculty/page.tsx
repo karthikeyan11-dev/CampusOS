@@ -45,7 +45,7 @@ export default function FacultyGatePassPage() {
         if (!matchesCategory && statusTab !== 'all') return false;
 
         if (statusTab === 'all') return true;
-        if (statusTab === 'pending_hod') return gp.status === 'waiting' && isAcademic;
+        if (statusTab === 'pending_hod') return gp.status === 'waiting' && isAcademic && gp.user_role !== 'department_admin';
         if (statusTab === 'approved') return gp.status === 'approved';
         if (statusTab === 'opened') return gp.status === 'opened' || gp.status === 'yet_to_be_closed';
         if (statusTab === 'closed') return gp.status === 'closed';
@@ -90,8 +90,8 @@ export default function FacultyGatePassPage() {
   };
 
   const isHOD = user?.role === 'department_admin';
-  const isAdmin = user?.role === 'super_admin';
-  const canApprove = isHOD || isAdmin;
+  const isAdmin = user?.role === 'super_admin' || user?.role === 'department_admin';
+  const canApprove = isAdmin;
 
   const tabs = [
     { id: 'all', label: 'All' },
@@ -111,9 +111,11 @@ export default function FacultyGatePassPage() {
           </h2>
           <p className="text-xs text-cos-text-secondary font-bold uppercase tracking-widest mt-1">Personnel Mobility Engine</p>
         </div>
-        <button onClick={() => setShowCreate(true)} className="btn-primary px-5 py-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest">
-          <Plus className="w-4 h-4" /> New Request
-        </button>
+        {!isAdmin && (
+          <button onClick={() => setShowCreate(true)} className="btn-primary px-5 py-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest">
+            <Plus className="w-4 h-4" /> New Request
+          </button>
+        )}
       </div>
 
       <div className="flex items-center gap-4 bg-cos-bg-card/50 p-1.5 rounded-2xl border border-cos-border w-fit">
@@ -132,12 +134,14 @@ export default function FacultyGatePassPage() {
       </div>
 
       <div className="flex p-1 bg-black/10 rounded-xl border border-white/5 w-fit overflow-x-auto scrollbar-hide">
-        {tabs.map(tab => (
-          <button key={tab.id} onClick={() => setStatusTab(tab.id)}
-            className={`px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all whitespace-nowrap ${statusTab === tab.id ? 'bg-cos-bg-elevated text-cos-primary border border-cos-primary/20' : 'text-cos-text-muted hover:text-cos-text-primary'}`}>
-            {tab.label}
-          </button>
-        ))}
+        {tabs
+          .filter(t => category === 'academic' || t.id !== 'pending_hod')
+          .map(tab => (
+            <button key={tab.id} onClick={() => setStatusTab(tab.id)}
+              className={`px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all whitespace-nowrap ${statusTab === tab.id ? 'bg-cos-bg-elevated text-cos-primary border border-cos-primary/20' : 'text-cos-text-muted hover:text-cos-text-primary'}`}>
+              {tab.label}
+            </button>
+          ))}
       </div>
 
       {loading ? (

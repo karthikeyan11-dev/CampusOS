@@ -167,7 +167,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 </h3>
                 <div className="space-y-1">
                   {visibleItems.map(item => {
-                    const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href.split('?')[0]));
+                    const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href + '/'));
                     return (
                       <Link key={item.href} href={item.href} onClick={() => setSidebarOpen(false)}
                         className={`sidebar-item flex items-center gap-3 text-sm font-bold ${isActive ? 'active shadow-lg shadow-orange-500/10 border border-white/5' : 'text-cos-text-secondary hover:text-cos-primary hover:bg-cos-primary/5 transition-all'}`}>

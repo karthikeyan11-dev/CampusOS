@@ -40,11 +40,10 @@ const createMockClient = () => {
       setTimeout(() => store.delete(key), seconds * 1000);
       return 1;
     },
-    scan: async (cursor, options) => {
-      const pattern = options.MATCH.replace(/\*/g, '.*');
-      const regex = new RegExp(`^${pattern}$`);
-      const keys = Array.from(store.keys()).filter(k => regex.test(k));
-      return { cursor: 0, keys };
+    keys: async (pattern) => {
+      const p = pattern.replace(/\*/g, '.*');
+      const regex = new RegExp(`^${p}$`);
+      return Array.from(store.keys()).filter(k => regex.test(k));
     },
     quit: async () => { isSimulated = false; store.clear(); },
     connect: async () => {},
@@ -226,23 +225,15 @@ const invalidatePattern = async (pattern) => {
     const client = await getRedisClient();
     if (!client || !client.isOpen) return;
     
-    // EXHAUSTIVE SCAN: Ensures all shards/slots are purged in development/production
-    let cursor = 0;
-    let totalInvalidated = 0;
-
-    do {
-      const result = await client.scan(cursor, { MATCH: pattern, COUNT: 100 });
-      cursor = result.cursor;
-      const keys = result.keys;
-
-      if (keys && keys.length > 0) {
-        await client.del(keys);
-        totalInvalidated += keys.length;
-      }
-    } while (cursor !== 0);
-
-    if (totalInvalidated > 0) {
-      console.log(`[REDIS] Purged ${totalInvalidated} stale nodes matching: ${pattern}`);
+    // Use a more robust pattern for smaller institutional datasets
+    const keys = await client.keys(pattern);
+    
+    if (keys && keys.length > 0) {
+      console.log(`[REDIS] Purging ${keys.length} stale nodes matching: ${pattern}`);
+      await client.del(keys);
+      console.log(`[REDIS] Successfully invalidated keys: ${keys.join(', ')}`);
+    } else {
+      console.log(`[REDIS] No stale nodes found for pattern: ${pattern}`);
     }
   } catch (err) {
     console.error(`🔴 Redis Exhaustive Invalidation Error (${pattern}):`, err.message);

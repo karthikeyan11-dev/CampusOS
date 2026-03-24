@@ -152,8 +152,12 @@ exports.updateDepartment = async (req, res, next) => {
 exports.deleteDepartment = async (req, res, next) => {
   try {
     const { id } = req.params;
-    await pool.query('DELETE FROM departments WHERE id = $1', [id]);
+    const result = await pool.query('DELETE FROM departments WHERE id = $1', [id]);
     
+    if (result.rowCount === 0) {
+      return res.status(404).json({ success: false, message: 'Department not found' });
+    }
+
     // ⚡ INVALDIATE CACHE
     await redisService.invalidatePattern('governance:departments:*');
 
@@ -288,8 +292,12 @@ exports.updateHostel = async (req, res, next) => {
 exports.deleteHostel = async (req, res, next) => {
   try {
     const { id } = req.params;
-    await pool.query('DELETE FROM hostels WHERE id = $1', [id]);
+    const result = await pool.query('DELETE FROM hostels WHERE id = $1', [id]);
     
+    if (result.rowCount === 0) {
+      return res.status(404).json({ success: false, message: 'Hostel not found' });
+    }
+
     // ⚡ INVALDIATE CACHE
     await redisService.invalidatePattern('governance:hostels:*');
 

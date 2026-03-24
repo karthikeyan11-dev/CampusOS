@@ -135,13 +135,13 @@ export default function UsersPage() {
   const handleEditMapping = (type: string, item: any) => {
     setMappingForm({
       type: type as any,
-      className: type === 'class' ? item.entity_name : '',
-      mentorId: type === 'class' ? item.mentor_id : '',
-      departmentId: (type === 'class' || type === 'department') ? (item.department_id || item.id) : '',
-      hodId: type === 'department' ? item.hod_id : '',
-      hostelId: type === 'hostel' ? item.id : '',
-      wardenId: type === 'hostel' ? item.warden_id : '',
-      deputyWardenId: type === 'hostel' ? item.deputy_warden_id : ''
+      className: type === 'class' ? (item.entity_name || '') : '',
+      mentorId: type === 'class' ? (item.mentor_id || '') : '',
+      departmentId: (type === 'class' || type === 'department') ? (item.department_id || item.id || '') : '',
+      hodId: type === 'department' ? (item.hod_id || '') : '',
+      hostelId: type === 'hostel' ? (item.id || '') : '',
+      wardenId: type === 'hostel' ? (item.warden_id || '') : '',
+      deputyWardenId: type === 'hostel' ? (item.deputy_warden_id || '') : ''
     });
     setShowMappingModal(true);
   };
@@ -189,7 +189,19 @@ export default function UsersPage() {
             <h3 className="text-sm font-bold uppercase tracking-widest text-cos-text-primary flex items-center gap-2">
               <Map className="w-4 h-4 text-cos-primary" /> Authority Mappings
             </h3>
-            <button onClick={() => setShowMappingModal(true)} className="btn-primary px-4 py-2 text-[10px] font-black uppercase tracking-widest flex items-center gap-2">
+            <button onClick={() => {
+              setMappingForm({
+                type: 'class',
+                className: '',
+                mentorId: '',
+                departmentId: '',
+                hodId: '',
+                hostelId: '',
+                wardenId: '',
+                deputyWardenId: ''
+              });
+              setShowMappingModal(true);
+            }} className="btn-primary px-4 py-2 text-[10px] font-black uppercase tracking-widest flex items-center gap-2">
               <UserPlus className="w-3.5 h-3.5" /> Set Mapping
             </button>
           </div>
