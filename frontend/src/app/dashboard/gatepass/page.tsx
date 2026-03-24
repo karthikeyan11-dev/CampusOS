@@ -150,7 +150,7 @@ export default function GatePassPage() {
     } catch (err) { console.error(err); }
   };
 
-  const canRequest = ['student', 'faculty', 'department_admin'].includes(user?.role || '');
+  const canRequest = user?.role === 'student';
   const canApprove = ['faculty', 'department_admin', 'warden', 'deputy_warden', 'super_admin'].includes(user?.role || '');
   const canScan = user?.role === 'security_staff' || user?.role === 'super_admin';
 
