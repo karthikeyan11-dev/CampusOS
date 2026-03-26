@@ -739,12 +739,81 @@ const getFacultyMapping = async (req, res, next) => {
   }
 };
 
+
+/**
+ * PATCH /auth/me
+ * Update own profile (name, phone, student parent contact info)
+ */
+const updateProfile = async (req, res, next) => {
+  try {
+    const { name, phone, fatherName, fatherPhone, motherName, motherPhone } = req.body;
+
+    // Update base user record
+    const userResult = await pool.query(
+      `UPDATE users SET 
+        name = COALESCE($1, name),
+        phone = COALESCE($2, phone),
+        updated_at = NOW()
+       WHERE id = $3 RETURNING id, email, name, phone, role, status, avatar_url, department_id`,
+      [name || null, phone || null, req.user.id]
+    );
+
+    const updatedUser = userResult.rows[0];
+
+    // For students: allow updating parent contact info
+    if (updatedUser.role === ROLES.STUDENT) {
+      // Check edit window (5 days after approval)
+      const approvalCheck = await pool.query(
+        'SELECT approved_at FROM users WHERE id = $1',
+        [req.user.id]
+      );
+      const approvedAt = approvalCheck.rows[0]?.approved_at;
+      if (approvedAt) {
+        const diffDays = Math.floor((new Date() - new Date(approvedAt)) / (1000 * 3600 * 24));
+        if (diffDays > 5) {
+          return res.status(403).json({
+            success: false,
+            message: 'Student profile edit window (5 days) has expired.'
+          });
+        }
+      }
+
+      if (fatherName || fatherPhone || motherName || motherPhone) {
+        await pool.query(
+          `UPDATE students SET
+            father_name = COALESCE($1, father_name),
+            father_phone = COALESCE($2, father_phone),
+            mother_name = COALESCE($3, mother_name),
+            mother_phone = COALESCE($4, mother_phone)
+           WHERE user_id = $5`,
+          [fatherName || null, fatherPhone || null, motherName || null, motherPhone || null, req.user.id]
+        );
+      }
+    }
+
+    // Invalidate profile cache if exists
+    try {
+      const client = await redisService.getRedisClient();
+      await client.del(`profile:${req.user.id}`);
+    } catch (_) {}
+
+    res.json({
+      success: true,
+      message: 'Profile updated successfully.',
+      data: updatedUser,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   register,
   login,
   refreshAccessToken,
   logout,
   getProfile,
+  updateProfile,
   approveUser,
   getPendingUsers,
   promoteUser,

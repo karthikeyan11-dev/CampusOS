@@ -102,6 +102,8 @@ export const authAPI = {
   promote: (id: string, data: { role?: string, designation?: string }) => api.patch(`/auth/users/${id}/promote`, data),
   updateClassAssignment: (data: { className: string, mentorId: string, departmentId: string }) => api.post('/auth/assignments/class', data),
   updateDepartmentAssignment: (data: { departmentId: string, hodId: string }) => api.post('/auth/assignments/department', data),
+  updateProfile: (data: { name?: string; phone?: string; fatherName?: string; fatherPhone?: string; motherName?: string; motherPhone?: string }) =>
+    api.patch('/auth/me', data),
 };
 
 // Notifications
@@ -171,6 +173,14 @@ export const lostFoundAPI = {
   getById: (id: string) => api.get(`/lostfound/${id}`),
   resolve: (id: string, matchedItemId?: string) =>
     api.patch(`/lostfound/${id}/resolve`, { matchedItemId }),
+};
+
+// Hostel
+export const hostelAPI = {
+  getAll: () => api.get('/hostels'),
+  create: (data: object) => api.post('/hostels', data),
+  assignWardens: (id: string, data: { wardenId?: string; deputyWardenId?: string }) =>
+    api.patch(`/hostels/${id}/assign`, data),
 };
 
 // Departments

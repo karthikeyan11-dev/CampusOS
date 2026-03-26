@@ -134,6 +134,8 @@ const PERMISSIONS = {
   'users:approve_students': [ROLES.FACULTY, ROLES.DEPARTMENT_ADMIN],
   'users:approve_staff': [ROLES.SUPER_ADMIN],
   'users:view_department': [ROLES.DEPARTMENT_ADMIN, ROLES.FACULTY],
+  'users:view': [ROLES.SUPER_ADMIN, ROLES.DEPARTMENT_ADMIN, ROLES.FACULTY, ROLES.WARDEN, ROLES.DEPUTY_WARDEN],
+  'users:view_all': [ROLES.SUPER_ADMIN],
 
   // Notifications
   'notifications:publish_all': [ROLES.SUPER_ADMIN],
@@ -179,6 +181,7 @@ const PERMISSIONS = {
 
   // Hostel Management
   'hostels:manage': [ROLES.SUPER_ADMIN],
+  'hostels:view': [ROLES.SUPER_ADMIN, ROLES.WARDEN, ROLES.DEPUTY_WARDEN],
 
   // User Promotion
   'users:promote': [ROLES.SUPER_ADMIN],

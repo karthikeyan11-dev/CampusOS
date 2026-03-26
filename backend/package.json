@@ -7,11 +7,14 @@
     "start": "node src/app.js",
     "dev": "nodemon src/app.js",
     "migrate": "node src/database/migrate.js",
+    "migrate:fix": "node migrations/002_schema_fixes.js",
+    "migrate:demo": "node migrations/003_demo_seed.js",
+    "migrate:all": "node src/database/migrate.js && node migrations/002_schema_fixes.js && node src/database/seed.js && node migrations/003_demo_seed.js",
     "seed": "node src/database/seed.js",
-    "migrate:seed": "node src/database/migrate.js && node src/database/seed.js",
-    "migrate:fix": "node src/database/migrations/20260315_full_system_correction.js"
+    "migrate:seed": "node src/database/migrate.js && node src/database/seed.js"
   },
   "dependencies": {
+    "@upstash/redis": "^1.37.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",

@@ -46,7 +46,8 @@ const config = {
   },
   
   redis: {
-    url: process.env.REDIS_URL || 'redis://localhost:6379',
+    url: process.env.UPSTASH_REDIS_REST_URL,
+    token: process.env.UPSTASH_REDIS_REST_TOKEN,
   },
 };
 
@@ -69,7 +70,11 @@ const validateEnv = () => {
 
   if (!config.jwt.qrSecret) errors.push('JWT_QR_SECRET is missing.');
 
-  // 3. SMTP (Phase 3)
+  // 3. Redis (Upstash Mandatory)
+  if (!config.redis.url) errors.push('UPSTASH_REDIS_REST_URL is missing.');
+  if (!config.redis.token) errors.push('UPSTASH_REDIS_REST_TOKEN is missing.');
+
+  // 4. SMTP (Phase 3)
   if (!config.smtp.host) errors.push('SMTP_HOST is missing.');
   if (!config.smtp.user) errors.push('SMTP_USER is missing.');
   if (!config.smtp.pass) errors.push('SMTP_PASS is missing.');

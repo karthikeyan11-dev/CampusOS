@@ -1,139 +1,50 @@
-const { createClient } = require('redis');
+const { Redis } = require('@upstash/redis');
 const config = require('../config/env');
 
-let redisClient = null;
-let isSimulated = false;
+/**
+ * UPSTASH REDIS SERVICE (Serverless)
+ * Replaces local Redis with Upstash REST-based client for production reliability.
+ */
+
+const redis = new Redis({
+  url: config.redis.url,
+  token: config.redis.token,
+});
 
 /**
- * High-Fidelity In-Memory Redis Simulator
- * Used only when physical Redis is unavailable to prevent system breakdown.
+ * Initialize Redis (No-op for Upstash REST)
  */
-const createMockClient = () => {
-  const store = new Map();
-  console.warn('🛑 [REDIS] CRITICAL: Physical Redis unreachable. Initializing IN-MEMORY SIMULATION layer.');
-  console.warn('⚠️  [REDIS] DATA LOSS PERIL: Simulation is volatile. State will reset on server restart.');
-  
-  isSimulated = true;
-  return {
-    isOpen: true,
-    isMock: true,
-    get: async (key) => store.get(key) || null,
-    set: async (key, val, options) => {
-      store.set(key, val);
-      if (options?.PX) setTimeout(() => store.delete(key), options.PX);
-      if (options?.EX) setTimeout(() => store.delete(key), options.EX * 1000);
-      return 'OK';
-    },
-    del: async (key) => {
-      if (Array.isArray(key)) {
-        key.forEach(k => store.delete(k));
-        return key.length;
-      }
-      return store.delete(key) ? 1 : 0;
-    },
-    incr: async (key) => {
-      const val = parseInt(store.get(key) || '0') + 1;
-      store.set(key, val.toString());
-      return val;
-    },
-    expire: async (key, seconds) => {
-      setTimeout(() => store.delete(key), seconds * 1000);
-      return 1;
-    },
-    keys: async (pattern) => {
-      const p = pattern.replace(/\*/g, '.*');
-      const regex = new RegExp(`^${p}$`);
-      return Array.from(store.keys()).filter(k => regex.test(k));
-    },
-    quit: async () => { isSimulated = false; store.clear(); },
-    connect: async () => {},
-    on: () => {}
-  };
-};
-
-/**
- * MANDATORY: Initialize Redis Connection with Exponential Backoff
- */
-const initRedis = async (retries = 3, delay = 1000) => {
-  if (redisClient && redisClient.isOpen) return redisClient;
-
-  // 🚩 CRITICAL: If retries are exhausted, pivot to simulation immediately
-  if (retries <= 0) {
-    if (config.nodeEnv === 'production') {
-      console.error('🛑 [FATAL] Redis mandatory in Production. System halting.');
-      process.exit(1);
-    }
-    redisClient = createMockClient();
-    return redisClient;
-  }
-
-  // Use IPv4 explicit to bypass Windows ::1 conflicts
-  const redisUrl = (config.redis.url || 'redis://127.0.0.1:6379').replace('localhost', '127.0.0.1');
-
-  if (!redisClient) {
-    redisClient = createClient({
-      url: redisUrl,
-      socket: { 
-        reconnectStrategy: false, // Force fast-failure for boot check
-        connectTimeout: 2000
-      }
-    });
-
-    redisClient.on('error', (err) => {
-      if (!isSimulated && retries === 1) console.error('🔴 [REDIS] Final connectivity check failed:', err.message);
-    });
-  }
-
-  try {
-    if (!redisClient.isOpen) {
-      await redisClient.connect();
-      console.log('✅ [REDIS] Physical Layer Connected. Synchronization active.');
-    }
-    return redisClient;
-  } catch (err) {
-    console.warn(`⏳ [REDIS] No local server at ${redisUrl}. Retrying (${retries})...`);
-    await new Promise(resolve => setTimeout(resolve, delay));
-    
-    // Cleanup for next attempt
-    try { await redisClient.quit(); } catch(e) {}
-    redisClient = null; 
-    return initRedis(retries - 1, delay * 2);
-  }
+const initRedis = async () => {
+  console.log('✅ [REDIS] Upstash REST Client initialized.');
+  return redis;
 };
 
 const getRedisClient = async () => {
-  if (!redisClient) await initRedis();
-  return redisClient;
+  return redis;
 };
 
 /**
- * Cache scan results with Stampede Protection
+ * Cache scan results
  */
 const cacheScan = async (passId, data, ttlSeconds = 3) => {
   try {
-    const client = await getRedisClient();
-    if (!client || !client.isOpen) return; // Fallback to DB-only
-    
-    await client.set(`gatepass:scan:${passId}`, JSON.stringify(data), {
-      EX: ttlSeconds
+    await redis.set(`gatepass:scan:${passId}`, JSON.stringify(data), {
+      ex: ttlSeconds
     });
   } catch (err) {
-    console.warn('⚠️ Redis Cache Set Error (Degrading to DB-only):', err.message);
+    console.warn('⚠️ Upstash Redis Cache Set Error:', err.message);
   }
 };
 
 /**
- * Get cached scan with Fallback
+ * Get cached scan
  */
 const getCachedScan = async (passId) => {
   try {
-    const client = await getRedisClient();
-    if (!client || !client.isOpen) return null; // Fallback to DB-only
-    
-    const data = await client.get(`gatepass:scan:${passId}`);
-    return data ? JSON.parse(data) : null;
+    const data = await redis.get(`gatepass:scan:${passId}`);
+    return data ? (typeof data === 'string' ? JSON.parse(data) : data) : null;
   } catch (err) {
-    console.warn('⚠️ Redis Cache Get Error (Degrading to DB-only):', err.message);
+    console.warn('⚠️ Upstash Redis Cache Get Error:', err.message);
     return null;
   }
 };
@@ -143,26 +54,20 @@ const getCachedScan = async (passId) => {
  */
 const invalidateScan = async (passId) => {
   try {
-    const client = await getRedisClient();
-    if (!client || !client.isOpen) return;
-    
-    await client.del(`gatepass:scan:${passId}`);
+    await redis.del(`gatepass:scan:${passId}`);
   } catch (err) {
-    console.warn('⚠️ Redis Cache Del Error:', err.message);
+    console.warn('⚠️ Upstash Redis Cache Del Error:', err.message);
   }
 };
 
 /**
- * Distributed Lock for Scheduler with Renewal Support
+ * Distributed Lock for Scheduler
  */
 const acquireLock = async (lockName, ttlMs = 60000) => {
   try {
-    const client = await initRedis(); // Ensures connection
-    if (!client || !client.isOpen) return false; 
-    
-    const result = await client.set(`lock:${lockName}`, 'locked', {
-      NX: true,
-      PX: ttlMs
+    const result = await redis.set(`lock:${lockName}`, 'locked', {
+      nx: true,
+      px: ttlMs
     });
     return result === 'OK';
   } catch (err) {
@@ -172,42 +77,37 @@ const acquireLock = async (lockName, ttlMs = 60000) => {
 
 const releaseLock = async (lockName) => {
   try {
-    const client = await getRedisClient();
-    if (!client || !client.isOpen) return;
-    await client.del(`lock:${lockName}`);
+    await redis.del(`lock:${lockName}`);
   } catch (err) {}
 };
 
 const getStampedeLock = async (key, ttlMs = 500) => {
   try {
-    const client = await initRedis();
-    if (!client || !client.isOpen) return false;
-    const result = await client.set(`stampede:${key}`, '1', { NX: true, PX: ttlMs });
+    const result = await redis.set(`stampede:${key}`, '1', { 
+      nx: true, 
+      px: ttlMs 
+    });
     return result === 'OK';
   } catch (e) { return false; }
 };
 
 /**
  * COMPREHENSIVE CACHE-ASIDE PATTERN
- * Wraps database calls with Redis caching and TTL management.
  */
 const getOrSetCache = async (key, dbFetcher, ttlSeconds = 300) => {
   try {
-    const client = await getRedisClient();
-    if (!client || !client.isOpen) return await dbFetcher();
-
-    const cached = await client.get(key);
+    const cached = await redis.get(key);
     if (cached) {
       console.log(`[REDIS] HIT: ${key}`);
-      return JSON.parse(cached);
+      return typeof cached === 'string' ? JSON.parse(cached) : cached;
     }
 
     console.log(`[REDIS] MISS: ${key}. Fetching from DB...`);
     const data = await dbFetcher();
     
-    // Asynchronous caching (don't block the response)
-    client.set(key, JSON.stringify(data), { EX: ttlSeconds }).catch(err => {
-      console.error(`🔴 Redis Async Set Error (${key}):`, err.message);
+    // Asynchronous caching
+    redis.set(key, JSON.stringify(data), { ex: ttlSeconds }).catch(err => {
+      console.error(`🔴 Upstash Redis Async Set Error (${key}):`, err.message);
     });
 
     return data;
@@ -222,21 +122,17 @@ const getOrSetCache = async (key, dbFetcher, ttlSeconds = 300) => {
  */
 const invalidatePattern = async (pattern) => {
   try {
-    const client = await getRedisClient();
-    if (!client || !client.isOpen) return;
-    
-    // Use a more robust pattern for smaller institutional datasets
-    const keys = await client.keys(pattern);
+    const keys = await redis.keys(pattern);
     
     if (keys && keys.length > 0) {
       console.log(`[REDIS] Purging ${keys.length} stale nodes matching: ${pattern}`);
-      await client.del(keys);
+      await redis.del(...keys);
       console.log(`[REDIS] Successfully invalidated keys: ${keys.join(', ')}`);
     } else {
       console.log(`[REDIS] No stale nodes found for pattern: ${pattern}`);
     }
   } catch (err) {
-    console.error(`🔴 Redis Exhaustive Invalidation Error (${pattern}):`, err.message);
+    console.error(`🔴 Upstash Redis Invalidation Error (${pattern}):`, err.message);
   }
 };
 

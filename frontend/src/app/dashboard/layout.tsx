@@ -28,7 +28,7 @@ const getNavItems = (role: string) => {
     ]},
     { group: 'Operations', items: [
       { href: '/dashboard/gatepass', icon: QrCode, label: 'Gatepass (Student)', roles: allRoles },
-      { href: '/dashboard/gatepass-faculty', icon: QrCode, label: 'Gatepass (Faculty)', roles: ['faculty', 'department_admin', 'super_admin', 'security_staff'] },
+      { href: '/dashboard/gatepass-faculty', icon: QrCode, label: 'Gatepass (Faculty)', roles: ['faculty', 'department_admin', 'super_admin', 'security_staff', 'warden', 'deputy_warden'] },
       { href: '/dashboard/complaints', icon: MessageSquareWarning, label: 'Complaints Hub', roles: allRoles },
       { href: '/dashboard/resources', icon: Calendar, label: 'Resource Booking', roles: ['faculty', 'department_admin'] },
       { href: '/dashboard/lostfound', icon: Hash, label: 'Lost & Found', roles: ['student', 'faculty', 'department_admin', 'super_admin'] },

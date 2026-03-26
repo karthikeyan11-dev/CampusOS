@@ -5,16 +5,20 @@ import { useAuthStore } from '@/stores/auth.store';
 import { authAPI } from '@/lib/api';
 import { 
   User, Mail, Phone, Shield, Building2, Calendar, 
-  Hash, Home, Loader2, Heart, GraduationCap, Briefcase 
+  Hash, Home, Loader2, Heart, GraduationCap, Briefcase,
+  Edit2, Timer, X, Save
 } from 'lucide-react';
-import { formatRoleName, getRoleBadgeColor, formatDateTime } from '@/lib/utils';
-import { BackButton } from '@/components/layout/BackButton';
+import { formatRoleName, getRoleBadgeColor } from '@/lib/utils';
 import { motion } from 'framer-motion';
-import { Edit2, Timer } from 'lucide-react';
 
 export default function ProfilePage() {
   const { user, setUser } = useAuthStore();
   const [syncing, setSyncing] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [editForm, setEditForm] = useState({
+    name: '', phone: '', fatherName: '', fatherPhone: '', motherName: '', motherPhone: '',
+  });
 
   useEffect(() => {
     const syncProfile = async () => {
@@ -22,7 +26,16 @@ export default function ProfilePage() {
       try {
         const res = await authAPI.getProfile();
         if (res.data?.success) {
-          setUser(res.data.data);
+          const u = res.data.data;
+          setUser(u);
+          setEditForm({
+            name: u.name || '',
+            phone: u.phone || '',
+            fatherName: u.student?.parents?.father?.name || '',
+            fatherPhone: u.student?.parents?.father?.phone || '',
+            motherName: u.student?.parents?.mother?.name || '',
+            motherPhone: u.student?.parents?.mother?.phone || '',
+          });
         }
       } catch (err) {
         console.error('Failed to sync profile:', err);
@@ -33,6 +46,21 @@ export default function ProfilePage() {
     syncProfile();
   }, [setUser]);
 
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await authAPI.updateProfile(editForm);
+      const res = await authAPI.getProfile();
+      if (res.data?.success) setUser(res.data.data);
+      setShowEdit(false);
+    } catch (err: any) {
+      alert(err.response?.data?.message || 'Failed to update profile');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   if (!user) return (
     <div className="flex items-center justify-center p-20">
       <Loader2 className="w-8 h-8 animate-spin text-cos-primary" />
@@ -40,22 +68,20 @@ export default function ProfilePage() {
   );
 
   const isStudent = user?.role === 'student' || !!user?.student;
-  const s = user?.student || (isStudent ? user : null) as any;
+  const s = (user as any)?.student || (isStudent ? user : null) as any;
 
   const canEdit = () => {
     if (user.role === 'super_admin') return true;
     if (isStudent && user.approved_at) {
-      const approvedDate = new Date(user.approved_at);
-      const diffDays = Math.floor((new Date().getTime() - approvedDate.getTime()) / (1000 * 3600 * 24));
+      const diffDays = Math.floor((new Date().getTime() - new Date(user.approved_at).getTime()) / (1000 * 3600 * 24));
       return diffDays <= 5;
     }
-    return !isStudent; // Faculty currently have default access unless restricted later
+    return !isStudent;
   };
 
   const getDaysRemaining = () => {
-    if (!user.approved_at) return 0;
-    const approvedDate = new Date(user.approved_at);
-    const diffDays = Math.floor((new Date().getTime() - approvedDate.getTime()) / (1000 * 3600 * 24));
+    if (!user.approved_at) return 5;
+    const diffDays = Math.floor((new Date().getTime() - new Date(user.approved_at).getTime()) / (1000 * 3600 * 24));
     return Math.max(0, 5 - diffDays);
   };
 
@@ -69,18 +95,16 @@ export default function ProfilePage() {
           <h2 className="text-3xl font-black tracking-tight">Personal <span className="gradient-text">Identity</span></h2>
           <p className="text-cos-text-secondary font-medium">Verified credentials and associations</p>
         </div>
-        <div className="flex gap-3">
-          {editAllowed && (
-            <button className="btn-primary flex items-center gap-2 text-xs font-black uppercase tracking-widest px-6 shadow-lg shadow-cos-primary/20">
-              <Edit2 className="w-4 h-4" /> Edit Profile
-            </button>
-          )}
-          <BackButton />
-        </div>
+        {editAllowed && (
+          <button onClick={() => setShowEdit(true)}
+            className="btn-primary flex items-center gap-2 text-xs font-black uppercase tracking-widest px-6 shadow-lg shadow-cos-primary/20">
+            <Edit2 className="w-4 h-4" /> Edit Profile
+          </button>
+        )}
       </header>
 
       <div className="grid lg:grid-cols-4 gap-8">
-        {/* Left Card - Identity Card */}
+        {/* Identity Card */}
         <div className="lg:col-span-1 space-y-6">
           <div className="glass-card p-1 relative overflow-hidden group">
             <div className="absolute top-0 left-0 w-full h-2 gradient-bg" />
@@ -91,9 +115,7 @@ export default function ProfilePage() {
                 ) : user.name.charAt(0)}
               </div>
               <h3 className="text-xl font-black mb-1">{user.name}</h3>
-              <p className="text-cos-text-muted text-xs font-bold uppercase tracking-widest mb-4">
-                {user.id.substring(0, 8)}
-              </p>
+              <p className="text-cos-text-muted text-xs font-bold uppercase tracking-widest mb-4">{user.id.substring(0, 8)}</p>
               <div className={`badge py-1.5 px-4 font-bold border-2 ${getRoleBadgeColor(user.role)}`}>
                 {formatRoleName(user.role)}
               </div>
@@ -101,7 +123,7 @@ export default function ProfilePage() {
           </div>
 
           <div className="glass-card p-6">
-            <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-cos-text-muted mb-6">Security & Logs</h4>
+            <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-cos-text-muted mb-6">Session Controls</h4>
             <div className="space-y-4">
               {isStudent && (
                  <div className={`p-4 rounded-xl border text-center space-y-2 mb-2 ${editAllowed ? 'bg-amber-500/10 border-amber-500/20' : 'bg-red-500/10 border-red-500/20'}`}>
@@ -113,15 +135,12 @@ export default function ProfilePage() {
                     </div>
                  </div>
               )}
-              <button className="w-full btn-secondary text-xs py-3 font-bold uppercase tracking-widest">Update Password</button>
-              <button className="w-full text-xs font-bold text-cos-text-muted hover:text-red-400 transition-colors uppercase tracking-widest">Request Account Termination</button>
             </div>
           </div>
         </div>
 
         {/* Info Sections */}
         <div className="lg:col-span-3 space-y-8">
-          {/* Universal Details */}
           <div className="glass-card p-8">
              <h4 className="text-lg font-black mb-8 flex items-center gap-3">
                <User className="w-5 h-5 text-cos-primary" /> Basic Information
@@ -134,7 +153,6 @@ export default function ProfilePage() {
              </div>
           </div>
 
-          {/* Role Specific: STUDENT */}
           {isStudent && (
             <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-8">
               <div className="glass-card p-8 border-cos-primary/10">
@@ -142,75 +160,127 @@ export default function ProfilePage() {
                   <GraduationCap className="w-5 h-5 text-cos-primary" /> Academic Profile
                 </h4>
                 <div className="grid md:grid-cols-3 gap-8">
-                   <InfoItem icon={Hash} label="In-Roll ID" value={user.roll_number || s.roll_number} />
-                   <InfoItem icon={Calendar} label="Active Batch" value={user.class_name || s.class_name || 'Class of 2024'} />
-                   <InfoItem icon={Home} label="Living Status" value={user.residence_type?.replace(/_/g, ' ') || s.residence_type?.replace(/_/g, ' ')} />
+                   <InfoItem icon={Hash} label="In-Roll ID" value={user.roll_number || s?.roll_number} />
+                   <InfoItem icon={Calendar} label="Class" value={user.class_name || s?.class_name || '—'} />
+                   <InfoItem icon={Home} label="Living Status" value={(user.residence_type || s?.residence_type || '').replace(/_/g, ' ')} />
                 </div>
               </div>
 
               <div className="grid md:grid-cols-2 gap-8">
                 <div className="glass-card p-8">
                   <h4 className="text-lg font-black mb-6 flex items-center gap-3">
-                    <Heart className="w-5 h-5 text-cos-danger" /> Parent/Guardian
+                    <Heart className="w-5 h-5 text-red-400" /> Parent/Guardian
                   </h4>
                   <div className="space-y-6">
-                    <InfoItem label="Father's Identity" value={s.parents?.father?.name || s.father_name || 'N/A'} />
-                    <InfoItem label="Father's Contact" value={s.parents?.father?.phone || s.father_phone || 'N/A'} isPhone />
+                    <InfoItem label="Father's Identity" value={s?.parents?.father?.name || 'N/A'} />
+                    <InfoItem label="Father's Contact" value={s?.parents?.father?.phone || 'N/A'} isPhone />
                     <div className="pt-4 border-t border-white/5">
-                      <InfoItem label="Mother's Identity" value={s.parents?.mother?.name || s.mother_name || 'N/A'} />
-                      <InfoItem label="Mother's Contact" value={s.parents?.mother?.phone || s.mother_phone || 'N/A'} isPhone />
+                      <InfoItem label="Mother's Identity" value={s?.parents?.mother?.name || 'N/A'} />
+                      <InfoItem label="Mother's Contact" value={s?.parents?.mother?.phone || 'N/A'} isPhone />
                     </div>
                   </div>
                 </div>
 
                 <div className="glass-card p-8">
                   <h4 className="text-lg font-black mb-6 flex items-center gap-3">
-                    <Briefcase className="w-5 h-5 text-cos-secondary" /> Academic Oversight
+                    <Briefcase className="w-5 h-5 text-blue-400" /> Academic Oversight
                   </h4>
                   <div className="space-y-6">
-                    <InfoItem label="Mentor In-Charge" value={s.academic?.mentor?.name || s.mentor_name || 'Assigning...'} />
-                    <InfoItem label="Mentor Contact" value={s.academic?.mentor?.phone || s.mentor_phone || 'N/A'} isPhone />
+                    <InfoItem label="Mentor In-Charge" value={s?.academic?.mentor?.name || 'Not assigned'} />
+                    <InfoItem label="Mentor Contact" value={s?.academic?.mentor?.phone || 'N/A'} isPhone />
                     <div className="pt-4 border-t border-white/5">
-                      <InfoItem label="HOD In-Charge" value={s.academic?.hod?.name || s.hod_name || 'Department Admin'} />
-                      <InfoItem label="HOD Contact" value={s.academic?.hod?.phone || s.hod_phone || 'N/A'} isPhone />
+                      <InfoItem label="HOD In-Charge" value={s?.academic?.hod?.name || 'Department Admin'} />
+                      <InfoItem label="HOD Contact" value={s?.academic?.hod?.phone || 'N/A'} isPhone />
                     </div>
                   </div>
                 </div>
               </div>
 
-              {/* Hostel Section */}
-              {(user.residence_type === 'hosteller' || s.residence_type === 'hosteller') && (
-                <div className="glass-card p-8 border-cos-accent/10">
+              {(user.residence_type === 'hosteller' || s?.residence_type === 'hosteller') && (
+                <div className="glass-card p-8 border-blue-500/10">
                    <h4 className="text-lg font-black mb-8 flex items-center gap-3">
-                     <Home className="w-5 h-5 text-cos-accent" /> Residential Details (Hostel)
+                     <Home className="w-5 h-5 text-blue-400" /> Residential (Hostel)
                    </h4>
                    <div className="grid md:grid-cols-2 gap-12">
-                      <InfoItem label="Building Name" value={s.hostel?.name || s.hostel_name || 'Assigned Block'} />
-                      <div className="flex gap-12">
-                        <InfoItem label="Warden Name" value={s.hostel?.warden?.name || s.warden_name || 'Resident Warden'} />
-                        <InfoItem label="Warden Contact" value={s.hostel?.warden?.phone || s.warden_phone || 'N/A'} isPhone />
-                      </div>
+                      <InfoItem label="Building Name" value={s?.hostel?.name || 'Assigned Block'} />
+                      <InfoItem label="Warden Name" value={s?.hostel?.warden?.name || 'Resident Warden'} />
+                      <InfoItem label="Warden Contact" value={s?.hostel?.warden?.phone || 'N/A'} isPhone />
                    </div>
                 </div>
               )}
             </motion.div>
           )}
 
-          {/* Role Specific: FACULTY / STAFF */}
-          {!isStudent && user.faculty_id_number && (
+          {!isStudent && (user as any).faculty_id_number && (
              <div className="glass-card p-8 border-cos-primary/10">
                 <h4 className="text-lg font-black mb-8 flex items-center gap-3">
                   <Shield className="w-5 h-5 text-cos-primary" /> Official Verification
                 </h4>
                 <div className="grid md:grid-cols-2 gap-12">
-                   <InfoItem icon={Hash} label="Faculty/Official ID" value={user.faculty_id_number} />
-                   <InfoItem icon={Shield} label="Official Designation" value={user.designation || 'Academic Staff'} />
+                   <InfoItem icon={Hash} label="Faculty/Official ID" value={(user as any).faculty_id_number} />
+                   <InfoItem icon={Shield} label="Designation" value={(user as any).designation || 'Academic Staff'} />
                 </div>
              </div>
           )}
         </div>
       </div>
-      
+
+      {/* Edit Profile Modal */}
+      {showEdit && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 modal-overlay" onClick={() => setShowEdit(false)}>
+          <div className="glass-card p-8 w-full max-w-xl animate-scale-in max-h-[90vh] overflow-y-auto scrollbar-hide" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-8">
+              <div>
+                <h3 className="text-xl font-black tracking-tight">Edit <span className="gradient-text">Profile</span></h3>
+                <p className="text-[10px] text-cos-text-muted uppercase tracking-widest mt-1">Update your identity credentials</p>
+              </div>
+              <button onClick={() => setShowEdit(false)} className="p-2 hover:bg-white/10 rounded-xl transition-colors">
+                <X className="w-5 h-5 text-cos-text-muted" />
+              </button>
+            </div>
+            <form onSubmit={handleSave} className="space-y-6">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2 col-span-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-cos-text-muted">Full Name</label>
+                  <input className="input-field" value={editForm.name} onChange={e => setEditForm(p => ({...p, name: e.target.value}))} placeholder="Your full name" />
+                </div>
+                <div className="space-y-2 col-span-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-cos-text-muted">Phone Number</label>
+                  <input className="input-field" value={editForm.phone} onChange={e => setEditForm(p => ({...p, phone: e.target.value}))} placeholder="+91 XXXXX XXXXX" />
+                </div>
+              </div>
+              {isStudent && (
+                <div className="border-t border-white/10 pt-6 space-y-4">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-cos-text-muted">Parent / Guardian Info</p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-[10px] text-cos-text-muted uppercase tracking-widest">Father's Name</label>
+                      <input className="input-field" value={editForm.fatherName} onChange={e => setEditForm(p => ({...p, fatherName: e.target.value}))} />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] text-cos-text-muted uppercase tracking-widest">Father's Phone</label>
+                      <input className="input-field" value={editForm.fatherPhone} onChange={e => setEditForm(p => ({...p, fatherPhone: e.target.value}))} />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] text-cos-text-muted uppercase tracking-widest">Mother's Name</label>
+                      <input className="input-field" value={editForm.motherName} onChange={e => setEditForm(p => ({...p, motherName: e.target.value}))} />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] text-cos-text-muted uppercase tracking-widest">Mother's Phone</label>
+                      <input className="input-field" value={editForm.motherPhone} onChange={e => setEditForm(p => ({...p, motherPhone: e.target.value}))} />
+                    </div>
+                  </div>
+                </div>
+              )}
+              <button type="submit" disabled={saving}
+                className="btn-primary w-full py-4 text-xs font-black uppercase tracking-[0.3em] flex items-center justify-center gap-3">
+                {saving ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Save className="w-4 h-4" /> Save Changes</>}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
       {syncing && (
         <div className="fixed bottom-8 right-8 px-4 py-2 rounded-full bg-cos-primary/10 border border-cos-primary/20 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-cos-primary animate-pulse">
            <Loader2 className="w-3 h-3 animate-spin" /> Syncing Details

@@ -37,6 +37,11 @@ router.get('/me',
   authController.getProfile
 );
 
+router.patch('/me',
+  authenticate,
+  authController.updateProfile
+);
+
 // Admin routes
 router.get('/users/pending',
   authenticate,

@@ -23,6 +23,7 @@ export default function GatePassPage() {
   const [showScan, setShowScan] = useState(false);
   const [selectedPass, setSelectedPass] = useState<any>(null);
   const [showAuditId, setShowAuditId] = useState<string | null>(null);
+  const [profilePass, setProfilePass] = useState<any>(null);
 
   const [form, setForm] = useState({
     reason: '', leaveDate: '', outTime: '', returnDate: '', returnTime: '',
@@ -52,10 +53,15 @@ export default function GatePassPage() {
       const res = await gatePassAPI.getAll(params);
       let data = res.data.data || [];
       
-      // Frontend Filtering for strict category/status UI mapping
+      // Frontend Filtering - ALWAYS filter by category first, then by statusTab
       const filtered = data.filter((gp: any) => {
-        const isCorrectCategory = gp.residence_type === category;
-        if (!isCorrectCategory && statusTab !== 'all') return false;
+        // Primary filter: category MUST match (day_scholar or hosteller)
+        const gpCategory = gp.residence_type || gp.pass_type;
+        const isCorrectCategory = gpCategory === category ||
+          (category === 'day_scholar' && ['day_scholar', 'day-scholar'].includes(gpCategory)) ||
+          (category === 'hosteller' && gpCategory === 'hosteller');
+        
+        if (!isCorrectCategory) return false;
 
         if (statusTab === 'all') return true;
         if (statusTab === 'pending_faculty') return gp.status === 'pending_faculty';
@@ -148,6 +154,11 @@ export default function GatePassPage() {
       const res = await gatePassAPI.getById(id);
       setSelectedPass(res.data.data);
     } catch (err) { console.error(err); }
+  };
+
+  const handleViewProfile = (gp: any, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setProfilePass(gp);
   };
 
   const canRequest = user?.role === 'student';
@@ -310,7 +321,9 @@ export default function GatePassPage() {
 
               {/* Action Footer */}
               <div className="p-4 bg-black/20 border-t border-cos-border flex gap-3">
-                 <button className="flex-1 btn-secondary py-2 text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 group/btn">
+                 <button 
+                   onClick={(e) => handleViewProfile(gp, e)}
+                   className="flex-1 btn-secondary py-2 text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 group/btn">
                     <UserCircle className="w-3.5 h-3.5 group-hover/btn:text-cos-primary" /> View Profile
                  </button>
                  {canApprove && (
@@ -567,6 +580,11 @@ export default function GatePassPage() {
           </div>
         </div>
       )}
+
+      {/* Student Profile Modal */}
+      {profilePass && (
+        <StudentProfileModal pass={profilePass} onClose={() => setProfilePass(null)} />
+      )}
     </div>
   );
 }
@@ -601,6 +619,114 @@ function DetailItem({ label, value, full }: any) {
     <div className={full ? 'col-span-2' : ''}>
       <div className="text-[9px] font-black text-cos-text-muted uppercase tracking-widest mb-1.5">{label}</div>
       <div className="text-xs font-bold text-cos-text-primary pr-4">{value || 'N/A'}</div>
+    </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────── */
+/* Student Profile Modal                                  */
+/* Shows full student details from gate pass snapshot     */
+/* ────────────────────────────────────────────────────── */
+function StudentProfileModal({ pass, onClose }: { pass: any; onClose: () => void }) {
+  const isHosteller = pass.residence_type === 'hosteller' || pass.pass_type === 'hosteller';
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 modal-overlay" onClick={onClose}>
+      <div className="glass-card w-full max-w-lg max-h-[90vh] overflow-y-auto scrollbar-hide animate-scale-in" onClick={e => e.stopPropagation()}>
+        {/* Top accent bar */}
+        <div className="h-2 w-full gradient-bg rounded-t-2xl" />
+        <div className="p-8">
+          {/* Header */}
+          <div className="flex items-start justify-between mb-8">
+            <div className="flex items-center gap-4">
+              <div className="w-16 h-16 rounded-2xl gradient-bg flex items-center justify-center text-white text-2xl font-black shadow-lg shadow-orange-500/20">
+                {pass.user_name?.charAt(0)}
+              </div>
+              <div>
+                <h3 className="text-xl font-black tracking-tight">{pass.user_name}</h3>
+                <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                  <span className="text-[9px] font-black uppercase tracking-widest text-cos-primary bg-cos-primary/10 px-2 py-1 rounded-md">
+                    {pass.roll_number}
+                  </span>
+                  <span className={`text-[9px] font-black uppercase px-2 py-1 rounded-md border ${
+                    isHosteller
+                      ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
+                      : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                  }`}>
+                    {isHosteller ? '🏠 Hosteller' : '🚌 Day Scholar'}
+                  </span>
+                </div>
+              </div>
+            </div>
+            <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-xl transition-colors">
+              <X className="w-5 h-5 text-cos-text-muted" />
+            </button>
+          </div>
+
+          <div className="space-y-5">
+            {/* Identity */}
+            <section className="glass-card p-5">
+              <h4 className="text-[9px] font-black uppercase tracking-[0.2em] text-cos-text-muted border-b border-white/5 pb-2 mb-3">Identity Details</h4>
+              <div className="space-y-3">
+                <ProfileRow label="Department" value={pass.department_name || pass.department_code} />
+                <ProfileRow label="Phone" value={pass.user_phone} />
+                <ProfileRow label="Email" value={pass.user_email} />
+              </div>
+            </section>
+
+            {/* Academic Chain */}
+            <section className="glass-card p-5">
+              <h4 className="text-[9px] font-black uppercase tracking-[0.2em] text-cos-text-muted border-b border-white/5 pb-2 mb-3">Academic Chain</h4>
+              <div className="space-y-3">
+                <ProfileRow label="Mentor / Class Advisor" value={pass.faculty_name} />
+                <ProfileRow label="HOD" value={pass.hod_name} />
+                {isHosteller && (
+                  <ProfileRow
+                    label="Warden"
+                    value={pass.warden_name ? `${pass.warden_name}${pass.warden_mobile ? ' · ' + pass.warden_mobile : ''}` : '—'}
+                  />
+                )}
+              </div>
+            </section>
+
+            {/* Emergency Contacts */}
+            {(pass.father_name || pass.mother_name) && (
+              <section className="glass-card p-5">
+                <h4 className="text-[9px] font-black uppercase tracking-[0.2em] text-cos-text-muted border-b border-white/5 pb-2 mb-3">Emergency Contacts</h4>
+                <div className="space-y-3">
+                  {pass.father_name && (
+                    <ProfileRow label="Father" value={`${pass.father_name}${pass.father_phone ? ' · ' + pass.father_phone : ''}`} />
+                  )}
+                  {pass.mother_name && (
+                    <ProfileRow label="Mother" value={`${pass.mother_name}${pass.mother_phone ? ' · ' + pass.mother_phone : ''}`} />
+                  )}
+                </div>
+              </section>
+            )}
+
+            {/* Active Pass Summary */}
+            <section className="glass-card p-5 border-cos-primary/10">
+              <h4 className="text-[9px] font-black uppercase tracking-[0.2em] text-cos-primary/60 border-b border-cos-primary/10 pb-2 mb-3">Active Pass</h4>
+              <div className="space-y-3">
+                <ProfileRow label="Reason" value={pass.reason} />
+                <ProfileRow label="Leave Date" value={pass.leave_date ? `${pass.leave_date} ${pass.out_time || ''}` : '—'} />
+                <ProfileRow label="Return" value={pass.return_date ? `${pass.return_date} ${pass.return_time || ''}` : '—'} />
+                <ProfileRow label="Status" value={pass.status?.replace(/_/g, ' ')} highlight />
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProfileRow({ label, value, highlight }: { label: string; value?: string; highlight?: boolean }) {
+  return (
+    <div className="flex justify-between items-start gap-4">
+      <span className="text-[10px] font-bold text-cos-text-muted uppercase tracking-wider shrink-0">{label}</span>
+      <span className={`text-xs font-bold text-right ${highlight ? 'text-cos-primary' : 'text-cos-text-primary'}`}>
+        {value || '—'}
+      </span>
     </div>
   );
 }

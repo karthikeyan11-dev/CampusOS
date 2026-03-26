@@ -38,7 +38,12 @@ export default function LostFoundPage() {
     setCreating(true);
     try {
       const formData = new FormData();
-      Object.entries(form).forEach(([key, val]) => formData.append(key, val));
+      // Map camelCase form keys to backend expected keys
+      formData.append('type', form.type);
+      formData.append('title', form.title);
+      formData.append('description', form.description);
+      formData.append('location', form.locationFound);  // backend expects 'location'
+      formData.append('category', form.category);
       if (image) formData.append('image', image);
 
       await lostFoundAPI.create(formData);
@@ -98,9 +103,9 @@ export default function LostFoundPage() {
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
           {items.map((item: any) => (
             <div key={item.id} className="glass-card glass-card-hover group relative overflow-hidden">
-               {item.image_url && (
+               {item.image_urls && item.image_urls.length > 0 && (
                  <div className="h-48 overflow-hidden bg-black/20">
-                    <img src={item.image_url} alt={item.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                    <img src={item.image_urls[0]} alt={item.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
                  </div>
                )}
                <div className="p-6">
@@ -112,13 +117,12 @@ export default function LostFoundPage() {
                  </div>
                  <h3 className="font-bold text-lg mb-2">{item.title}</h3>
                  <p className="text-xs text-cos-text-secondary line-clamp-2 mb-4 leading-relaxed">{item.description}</p>
-                 
-                 <div className="space-y-2 text-xs text-cos-text-muted font-medium mb-6">
-                    <div className="flex items-center gap-2"><MapPin className="w-3.5 h-3.5 text-cos-primary" /> {item.location_found}</div>
-                    <div className="flex items-center gap-2"><User className="w-3.5 h-3.5 text-cos-primary" /> Posted by {item.reporter_name}</div>
-                 </div>
+                                  <div className="space-y-2 text-xs text-cos-text-muted font-medium mb-6">
+                     <div className="flex items-center gap-2"><MapPin className="w-3.5 h-3.5 text-cos-primary" /> {item.location}</div>
+                     <div className="flex items-center gap-2"><User className="w-3.5 h-3.5 text-cos-primary" /> Posted by {item.reported_by_name}</div>
+                  </div>
 
-                 {item.status === 'open' && (item.reporter_id === user?.id || user?.role === 'super_admin') && (
+                  {item.status === 'reported' && (item.reported_by === user?.id || user?.role === 'super_admin') && (
                    <button onClick={() => handleResolve(item.id)} className="w-full btn-secondary text-[10px] font-black uppercase tracking-widest py-3">
                      Mark Resolved
                    </button>

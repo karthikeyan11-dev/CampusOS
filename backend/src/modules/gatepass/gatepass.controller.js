@@ -41,17 +41,26 @@ const logTransitionToDB = async (passId, actorId, fromStatus, toStatus, remarks 
 
 // Idempotency: Redis-backed state machine for scan/action locks
 const checkIdempotency = async (key, ttlMs = 2000) => {
-  const client = redisService.getRedisClient();
-  const lockKey = `idempotency:gp:${key}`;
-  const result = await client.set(lockKey, 'locked', { NX: true, PX: ttlMs });
-  return result === 'OK';
+  try {
+    const client = await redisService.getRedisClient();
+    const lockKey = `idempotency:gp:${key}`;
+    const result = await client.set(lockKey, 'locked', { nx: true, px: ttlMs });
+    return result === 'OK';
+  } catch (err) {
+    console.warn('[REDIS] Idempotency check failed:', err.message);
+    return true; // Allow operation if Redis is unavailable
+  }
 };
 
 // Cache Invalidator — now uses Redis
 const invalidateScanCache = async (passId) => {
-  const client = redisService.getRedisClient();
-  await client.del(`gatepass:scan:${passId}`);
-  await client.del(`analytics:dashboard`); // Also invalidate global dashboard cache
+  try {
+    const client = await redisService.getRedisClient();
+    await client.del(`gatepass:scan:${passId}`);
+    await client.del(`analytics:dashboard`); // Also invalidate global dashboard cache
+  } catch (err) {
+    console.warn('[REDIS] Cache invalidation failed:', err.message);
+  }
 };
 
 // Centralized State Transition Engine
@@ -181,10 +190,10 @@ const getGatePasses = async (req, res, next) => {
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const query = `
-      SELECT gp.*, u.name as user_name, u.email as user_email,
+      SELECT gp.*, u.name as user_name, u.email as user_email, u.phone as user_phone,
              d.name as department_name, d.code as department_code,
              s.roll_number, s.residence_type,
-             s.father_phone, s.mother_phone,
+             s.father_name, s.father_phone, s.mother_name, s.mother_phone,
              fa.name as faculty_approver_name,
              ha.name as hod_approver_name,
              wa.name as warden_approver_name,
@@ -986,7 +995,10 @@ const approveFacultyGatePass = async (req, res, next) => {
         await logTransitionToDB(id, actorId, gp.status, nextStatus, remarks, req.user.name);
         return res.json({ success: true, data: updated });
       } else {
-        const result = await pool.query(`UPDATE gate_passes SET status = $1, admin_remarks = $3 WHERE id = $4 RETURNING *`, [nextStatus, actorId, remarks, id]);
+        const result = await pool.query(
+          `UPDATE gate_passes SET status = $1, admin_remarks = $2 WHERE id = $3 RETURNING *`,
+          [nextStatus, remarks, id]
+        );
         await logTransitionToDB(id, actorId, gp.status, nextStatus, remarks, req.user.name);
         return res.json({ success: true, data: result.rows[0] });
       }
