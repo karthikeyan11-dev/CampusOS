@@ -90,9 +90,8 @@ const validateEnv = () => {
   if (errors.length > 0) {
     console.error('\n❌ CONFIGURATION ERROR:');
     errors.forEach(err => console.error(`  - ${err}`));
-    console.error('\nPlease update your .env file and restart the server.\n');
-    if (isProd) process.exit(1);
-    else console.warn('⚠️ Server running with configuration warnings in development mode.');
+    console.error('\nPlease update your Vercel Environment Variables and redeploy.\n');
+    // REMOVED: process.exit(1). Let the app boot to avoid FUNCTION_INVOCATION_FAILED.
   } else {
     console.log('✅ Environment configuration validated.');
   }
