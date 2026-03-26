@@ -52,10 +52,12 @@ interface AuthState {
   isAuthenticated: boolean;
   isLoading: boolean;
   error: string | null;
+  lastActiveAt: number | null;
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
   loadUser: () => Promise<void>;
   setUser: (user: User) => void;
+  updateActivity: () => void;
   resetError: () => void;
 }
 
@@ -66,6 +68,7 @@ export const useAuthStore = create<AuthState>()(
       isAuthenticated: false,
       isLoading: true,
       error: null,
+      lastActiveAt: null,
 
       login: async (email: string, password: string) => {
         set({ isLoading: true, error: null });
@@ -76,10 +79,11 @@ export const useAuthStore = create<AuthState>()(
           localStorage.setItem('accessToken', accessToken);
           localStorage.setItem('refreshToken', refreshToken);
           
-          document.cookie = `campusos_token=${accessToken}; path=/; max-age=86400; SameSite=Lax`;
-          document.cookie = `campusos_role=${user.role}; path=/; max-age=86400; SameSite=Lax`;
-
-          set({ user, isAuthenticated: true, isLoading: false });
+          // 🛡️ Security Hardening: Set session cookie to expire in 30 mins
+          document.cookie = `campusos_token=${accessToken}; path=/; max-age=1800; SameSite=Lax`;
+          document.cookie = `campusos_role=${user.role}; path=/; max-age=1800; SameSite=Lax`;
+          
+          set({ user, isAuthenticated: true, isLoading: false, lastActiveAt: Date.now() });
         } catch (error: any) {
           set({ error: error.response?.data?.message || 'Authentication failed', isLoading: false });
           throw error;
@@ -91,15 +95,23 @@ export const useAuthStore = create<AuthState>()(
         localStorage.removeItem('refreshToken');
         document.cookie = 'campusos_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
         document.cookie = 'campusos_role=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
-        set({ user: null, isAuthenticated: false, isLoading: false, error: null });
+        set({ user: null, isAuthenticated: false, isLoading: false, error: null, lastActiveAt: null });
       },
 
       loadUser: async () => {
         const token = localStorage.getItem('accessToken');
         const state = get();
+        const INACTIVITY_LIMIT = 30 * 60 * 1000; // 30 mins
 
         if (!token) {
-          set({ user: null, isAuthenticated: false, isLoading: false });
+          get().logout();
+          return;
+        }
+
+        // 🛡️ Security Audit: Check for session inactivity timeout
+        if (state.lastActiveAt && Date.now() - state.lastActiveAt > INACTIVITY_LIMIT) {
+          console.warn('[AUTH] Session expired due to 30-minute inactivity.');
+          get().logout();
           return;
         }
 
@@ -120,10 +132,16 @@ export const useAuthStore = create<AuthState>()(
           ]) as any;
 
           const verifiedUser = response.data.data;
-          set({ user: verifiedUser, isAuthenticated: true, isLoading: false, error: null });
+          set({ 
+            user: verifiedUser, 
+            isAuthenticated: true, 
+            isLoading: false, 
+            error: null,
+            lastActiveAt: Date.now() // Reset activity timer on success
+          });
 
-          document.cookie = `campusos_token=${token}; path=/; max-age=86400; SameSite=Lax`;
-          document.cookie = `campusos_role=${verifiedUser.role}; path=/; max-age=86400; SameSite=Lax`;
+          document.cookie = `campusos_token=${token}; path=/; max-age=1800; SameSite=Lax`;
+          document.cookie = `campusos_role=${verifiedUser.role}; path=/; max-age=1800; SameSite=Lax`;
         } catch (error: any) {
           console.warn('[AUTH] Background session sync failed:', error.message);
           
@@ -149,12 +167,21 @@ export const useAuthStore = create<AuthState>()(
       },
 
       setUser: (user: User) => set({ user }),
+      updateActivity: () => {
+        if (get().isAuthenticated) {
+          set({ lastActiveAt: Date.now() });
+        }
+      },
       resetError: () => set({ error: null }),
     }),
     {
       name: 'campusos-auth-storage',
       storage: createJSONStorage(() => localStorage),
-      partialize: (state) => ({ user: state.user, isAuthenticated: state.isAuthenticated }),
+      partialize: (state) => ({ 
+        user: state.user, 
+        isAuthenticated: state.isAuthenticated,
+        lastActiveAt: state.lastActiveAt 
+      }),
     }
   )
 );

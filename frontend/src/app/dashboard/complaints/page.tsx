@@ -122,6 +122,10 @@ export default function ComplaintsPage() {
                     {c.submitted_by_name} · {formatDateTime(c.created_at)}
                     {c.department_name && ` · ${c.department_name}`}
                   </p>
+                  <div className="flex items-center gap-1.5 mt-2">
+                    <div className="w-1.5 h-1.5 rounded-full bg-cos-primary animate-pulse" />
+                    <span className="text-[10px] font-bold text-cos-primary uppercase tracking-widest">{c.current_authority}</span>
+                  </div>
                 </div>
                 <Eye className="w-4 h-4 text-cos-text-muted flex-shrink-0" />
               </div>
@@ -215,18 +219,42 @@ export default function ComplaintsPage() {
 
             <div className="text-sm text-cos-text-secondary leading-relaxed whitespace-pre-wrap mb-6">{selectedComplaint.description}</div>
 
+            <div className="bg-cos-bg-secondary/30 rounded-xl p-4 mb-6 border border-cos-border/50">
+               <div className="text-[10px] font-black uppercase tracking-widest text-cos-text-muted mb-2">Current Responsible Authority</div>
+               <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg gradient-bg flex items-center justify-center">
+                    <Shield className="w-4 h-4 text-white" />
+                  </div>
+                  <div className="text-sm font-black text-cos-text-primary uppercase tracking-tight">{selectedComplaint.current_authority}</div>
+               </div>
+            </div>
+
             {/* Status Actions */}
-            {canManage && (
-              <div className="border-t border-cos-border pt-4 mb-4">
-                <p className="text-xs text-cos-text-muted mb-2">Update Status:</p>
-                <div className="flex flex-wrap gap-2">
-                  {['in_progress', 'resolved', 'rejected', 'escalated'].map(s => (
-                    <button key={s} onClick={() => handleStatusUpdate(selectedComplaint.id, s)}
-                      className="btn-secondary text-xs px-3 py-1.5">{s.replace(/_/g, ' ')}</button>
-                  ))}
+            <div className="border-t border-cos-border pt-4 mb-4">
+              {canManage && selectedComplaint.status !== 'closed' && (
+                <>
+                  <p className="text-xs text-cos-text-muted mb-2">Administrative Actions:</p>
+                  <div className="flex flex-wrap gap-2">
+                    {['in_progress', 'resolved', 'rejected'].map(s => (
+                      <button key={s} onClick={() => handleStatusUpdate(selectedComplaint.id, s)}
+                        className="btn-secondary text-xs px-3 py-1.5 uppercase font-bold tracking-widest border-cos-primary/20 hover:border-cos-primary/50">{s.replace(/_/g, ' ')}</button>
+                    ))}
+                  </div>
+                </>
+              )}
+              
+              {user?.id === selectedComplaint.submitted_by && selectedComplaint.status === 'resolved' && (
+                <div className="mt-4 p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl flex items-center justify-between gap-4">
+                  <div className="text-xs font-bold text-emerald-400">Has the issue been resolved to your satisfaction?</div>
+                  <button 
+                    onClick={() => handleStatusUpdate(selectedComplaint.id, 'closed')}
+                    className="btn-primary bg-emerald-500 hover:bg-emerald-600 text-[10px] font-black uppercase px-6 py-2"
+                  >
+                    Confirm & Close
+                  </button>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
 
             {/* Comments */}
             {selectedComplaint.comments && selectedComplaint.comments.length > 0 && (

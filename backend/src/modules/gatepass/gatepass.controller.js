@@ -3,7 +3,7 @@ const { ROLES, GATE_PASS_STATUS, GATE_PASS_TYPE } = require('../../config/consta
 const { verifyGatePassQR, generateGatePassQR } = require('../../services/qr.service');
 const { getGatePassTimeWindow } = require('./gatepass.service');
 const { sendParentSMS } = require('../../services/sms.service');
-const { sendGatePassEmail } = require('../../services/email.service');
+const notificationService = require('../../services/notification.service');
 const redisService = require('../../services/redis.service');
 
 // Database Retry with Exponential Backoff
@@ -307,16 +307,21 @@ const approveGatePass = async (req, res, next) => {
         remarkField = 'admin_remarks';
       }
 
-      await pool.query(
+      const result = await pool.query(
         `UPDATE gate_passes SET status = 'rejected', 
          ${approverField} = $1, ${remarkField} = $2
-         WHERE id = $3`,
+         WHERE id = $3 RETURNING *`,
         [req.user.id, remarks, id]
       );
+      if (result.rows.length === 0) return res.status(404).json({ success: false, message: 'Pass not found.' });
+      
+      const gpRec = result.rows[0];
+      await logTransitionToDB(id, req.user.id, gp.status, GATE_PASS_STATUS.REJECTED, remarks, req.user.name);
+      
+      // Auto-Notify Student
+      await notificationService.notifyGatePassUpdate({ ...gpRec, status: GATE_PASS_STATUS.REJECTED }, req.user.name);
 
-      await logTransitionToDB(id, req.user.id, gp.status, 'rejected', remarks, req.user.name);
-
-      return res.json({ success: true, message: 'Gate pass rejected.' });
+      return res.json({ success: true, message: 'Gate pass rejected and student notified.' });
     }
 
     // === APPROVAL LOGIC ===
@@ -364,9 +369,15 @@ const approveGatePass = async (req, res, next) => {
       }
 
       newStatus = GATE_PASS_STATUS.APPROVED;
-      updateField = 'warden_approver_id';
-      remarkField = 'warden_remarks';
-      timestampField = 'warden_approved_at';
+      if (gp.pass_type === GATE_PASS_TYPE.HOSTELLER) {
+        updateField = 'warden_approver_id';
+        remarkField = 'warden_remarks';
+        timestampField = 'warden_approved_at';
+      } else {
+        updateField = 'admin_approver_id';
+        remarkField = 'admin_remarks';
+        timestampField = 'admin_approved_at';
+      }
     } else if (gp.status === 'waiting') {
       if (gp.pass_type === GATE_PASS_TYPE.FACULTY) {
         if (req.user.role !== ROLES.DEPARTMENT_ADMIN && req.user.role !== ROLES.SUPER_ADMIN) {
@@ -448,22 +459,11 @@ const approveGatePass = async (req, res, next) => {
 
       if (updateResult.rows.length > 0) {
         await logTransitionToDB(id, req.user.id, gp.status, newStatus, remarks, req.user.name);
+        
+        // Universal notification (App + Email)
+        await notificationService.notifyGatePassUpdate({ ...gp, status: newStatus }, req.user.name);
       } else {
-        return res.status(409).json({ 
-          success: false, 
-          error_code: 'CONCURRENCY_ERROR', 
-          message: 'Status was updated by another user.' 
-        });
-      }
-
-      try {
-        await sendGatePassEmail(
-          gp.user_email, gp.user_name, gp.reason,
-          `${gp.leave_date} ${gp.out_time}`,
-          gp.return_time ? `${gp.return_date} ${gp.return_time}` : null
-        );
-      } catch (emailErr) {
-        console.error('Email notification failed:', emailErr.message);
+        return res.status(409).json({ success: false, message: 'Status already updated.' });
       }
     } else {
       // INTERMEDIATE APPROVAL or NON-FINAL

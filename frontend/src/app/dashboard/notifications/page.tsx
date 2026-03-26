@@ -1,10 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { notificationAPI } from '@/lib/api';
+import { notificationAPI, governanceAPI } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth.store';
 import { formatDateTime, getStatusColor, truncate } from '@/lib/utils';
-import { Bell, Plus, Send, Eye, Loader2, X, Sparkles, Filter } from 'lucide-react';
+import { Bell, Plus, Send, Eye, Loader2, X, Sparkles, Filter, Users, School, GraduationCap } from 'lucide-react';
 
 export default function NotificationsPage() {
   const { user } = useAuthStore();
@@ -16,10 +16,22 @@ export default function NotificationsPage() {
 
   const [form, setForm] = useState({
     title: '', content: '', type: 'academic', targetType: 'all', expiresAt: '',
+    targetDepartmentId: '', targetBatch: '', targetClassId: ''
   });
+  const [departments, setDepartments] = useState<any[]>([]);
   const [creating, setCreating] = useState(false);
 
-  useEffect(() => { loadNotifications(); }, [filter]);
+  useEffect(() => { 
+    loadNotifications();
+    loadDepartments();
+  }, [filter]);
+
+  const loadDepartments = async () => {
+    try {
+      const res = await governanceAPI.lookupDepartments();
+      setDepartments(res.data.data || []);
+    } catch (err) { console.error('Failed to load departments', err); }
+  };
 
   const loadNotifications = async () => {
     setLoading(true);
@@ -37,11 +49,16 @@ export default function NotificationsPage() {
     setCreating(true);
     try {
       await notificationAPI.create({
-        ...form,
-        expiresAt: form.expiresAt || undefined,
+        title: form.title,
+        content: form.content,
+        type: form.type,
+        target_type: form.targetType,
+        target_department_id: (form.targetType === 'department' || form.targetType === 'faculty') && form.targetDepartmentId ? form.targetDepartmentId : undefined,
+        target_batch: form.targetType === 'batch' ? form.targetBatch : undefined,
+        expires_at: form.expiresAt || undefined,
       });
       setShowCreate(false);
-      setForm({ title: '', content: '', type: 'academic', targetType: 'all', expiresAt: '' });
+      setForm({ title: '', content: '', type: 'academic', targetType: 'all', expiresAt: '', targetDepartmentId: '', targetBatch: '', targetClassId: '' });
       loadNotifications();
     } catch (err: any) {
       alert(err.response?.data?.message || 'Failed to create notification');
@@ -152,17 +169,54 @@ export default function NotificationsPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm text-cos-text-secondary mb-1.5">Target</label>
+                  <label className="block text-sm text-cos-text-secondary mb-1.5">Target Audience</label>
                   <select className="input-field" value={form.targetType} onChange={e => setForm(p => ({ ...p, targetType: e.target.value }))}>
                     <option value="all">Entire College</option>
-                    <option value="department">Department</option>
-                    <option value="batch">Batch</option>
-                    <option value="hostellers">Hostellers</option>
-                    <option value="day_scholars">Day Scholars</option>
-                    <option value="faculty">Faculty</option>
+                    <option value="department">Specific Department</option>
+                    <option value="batch">Specific Batch</option>
+                    <option value="hosteller">All Hostellers</option>
+                    <option value="day_scholar">All Day Scholars</option>
+                    <option value="faculty">All Faculty Members</option>
                   </select>
                 </div>
               </div>
+
+              {/* Conditional Target Selection */}
+              {form.targetType === 'department' && (
+                <div className="space-y-1.5 animate-slide-up">
+                  <label className="text-[10px] font-black uppercase text-cos-primary flex items-center gap-1.5">
+                    <School className="w-3 h-3" /> Select Department
+                  </label>
+                  <select className="input-field py-3 border-cos-primary/20 bg-cos-primary/5" value={form.targetDepartmentId} onChange={e => setForm(p => ({ ...p, targetDepartmentId: e.target.value }))} required>
+                    <option value="">-- Choose Department --</option>
+                    {departments.map(d => (
+                      <option key={d.id} value={d.id}>{d.name} {d.code ? `(${d.code})` : ''}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {form.targetType === 'faculty' && (
+                <div className="space-y-1.5 animate-slide-up">
+                  <label className="text-[10px] font-black uppercase text-cos-primary flex items-center gap-1.5">
+                    <Users className="w-3 h-3" /> Select Department (Optional)
+                  </label>
+                  <select className="input-field py-3 border-cos-primary/20 bg-cos-primary/5" value={form.targetDepartmentId} onChange={e => setForm(p => ({ ...p, targetDepartmentId: e.target.value }))}>
+                    <option value="">-- All Departments --</option>
+                    {departments.map(d => (
+                      <option key={d.id} value={d.id}>{d.name} {d.code ? `(${d.code})` : ''}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {form.targetType === 'batch' && (
+                <div className="space-y-1.5 animate-slide-up">
+                  <label className="text-[10px] font-black uppercase text-cos-primary flex items-center gap-1.5">
+                    <GraduationCap className="w-3 h-3" /> Targeted Batch
+                  </label>
+                  <input className="input-field py-3 border-cos-primary/20 bg-cos-primary/5" value={form.targetBatch} onChange={e => setForm(p => ({ ...p, targetBatch: e.target.value }))} required placeholder="Ex: 2024 / II-Year" />
+                </div>
+              )}
               <div>
                 <label className="block text-sm text-cos-text-secondary mb-1.5">Expires At (optional)</label>
                 <input type="datetime-local" className="input-field" value={form.expiresAt} onChange={e => setForm(p => ({ ...p, expiresAt: e.target.value }))} />

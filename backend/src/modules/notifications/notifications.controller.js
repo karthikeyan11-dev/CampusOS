@@ -27,20 +27,23 @@ const createNotification = async (req, res, next) => {
       ? req.files.map((f) => `/uploads/notifications/${f.filename}`)
       : [];
 
+    // Pre-compute publish fields to avoid PostgreSQL parameter type conflicts
+    const isPublished = status === NOTIFICATION_STATUS.PUBLISHED;
+    const publishedAt = isPublished ? new Date() : null;
+    const approvedBy = isPublished ? req.user.id : null;
+    const approvedAt = isPublished ? new Date() : null;
+
     const result = await pool.query(
       `INSERT INTO notifications 
        (title, content, ai_summary, type, status, target_type, target_department_id,
         target_batch, target_class_id, posted_by, expires_at, is_pinned,
-        attachment_urls,
-        published_at, approved_by, approved_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-               CASE WHEN $5 = 'published' THEN NOW() ELSE NULL END,
-               CASE WHEN $5 = 'published' THEN $10 ELSE NULL END,
-               CASE WHEN $5 = 'published' THEN NOW() ELSE NULL END)
+        attachment_urls, published_at, approved_by, approved_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        RETURNING *`,
       [title, content, aiSummary, type || 'academic', status,
-       targetType || 'all', targetDepartmentId, targetBatch, targetClassId,
-       req.user.id, expiresAt, isPinned || false, attachmentUrls]
+       targetType || 'all', targetDepartmentId || null, targetBatch || null, targetClassId || null,
+       req.user.id, expiresAt || null, isPinned || false, attachmentUrls,
+       publishedAt, approvedBy, approvedAt]
     );
 
     const notification = result.rows[0];
@@ -89,21 +92,23 @@ const getNotifications = async (req, res, next) => {
       const student = studentRes.rows[0] || {};
 
       whereConditions.push(`(
-        n.target_type = 'all'
+        n.target_user_id = $${params.length + 5}
+        OR n.target_type = 'all'
         OR (n.target_type = 'department' AND n.target_department_id = $${params.length + 1})
         OR (n.target_type = 'batch' AND n.target_batch = $${params.length + 2})
         OR (n.target_type = 'class' AND n.target_class_id = $${params.length + 3})
         OR (n.target_type = 'hosteller' AND $${params.length + 4} = 'hosteller')
         OR (n.target_type = 'day_scholar' AND $${params.length + 4} = 'day_scholar')
       )`);
-      params.push(req.user.departmentId, student.batch, student.class_id, student.residence_type);
+      params.push(req.user.departmentId, student.batch, student.class_id, student.residence_type, req.user.id);
     } else if (req.user.role === ROLES.FACULTY) {
       whereConditions.push(`(
-        n.target_type = 'all'
-        OR n.target_type = 'faculty'
+        n.target_user_id = $${params.length + 2}
+        OR n.target_type = 'all'
+        OR (n.target_type = 'faculty' AND (n.target_department_id IS NULL OR n.target_department_id = $${params.length + 1}))
         OR (n.target_type = 'department' AND n.target_department_id = $${params.length + 1})
       )`);
-      params.push(req.user.departmentId);
+      params.push(req.user.departmentId, req.user.id);
     }
 
     // Filter expired
@@ -198,13 +203,14 @@ const approveNotification = async (req, res, next) => {
 
     const newStatus = action === 'approve' ? NOTIFICATION_STATUS.PUBLISHED : NOTIFICATION_STATUS.REJECTED;
 
+    const publishedAt = newStatus === NOTIFICATION_STATUS.PUBLISHED ? new Date() : null;
+
     const result = await pool.query(
       `UPDATE notifications 
-       SET status = $1, approved_by = $2, approved_at = NOW(),
-           published_at = CASE WHEN $1 = 'published' THEN NOW() ELSE NULL END
-       WHERE id = $3 AND status = 'pending_approval'
+       SET status = $1, approved_by = $2, approved_at = NOW(), published_at = $3
+       WHERE id = $4 AND status = 'pending_approval'
        RETURNING *`,
-      [newStatus, req.user.id, id]
+      [newStatus, req.user.id, publishedAt, id]
     );
 
     if (result.rows.length === 0) {

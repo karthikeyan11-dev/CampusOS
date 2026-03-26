@@ -160,14 +160,6 @@ export default function LoginPage() {
             </footer>
           </div>
 
-          {/* Quick Access Demo */}
-          <div className="mt-6 flex justify-center">
-             <div className="px-4 py-2 rounded-full bg-white/5 border border-white/5 text-[10px] font-bold text-cos-text-muted tracking-wide flex gap-3">
-               <span>DEMO: admin@campusos.edu</span>
-               <span className="text-white/20">|</span>
-               <span>admin123</span>
-             </div>
-          </div>
         </motion.div>
       </div>
     </div>

@@ -1,6 +1,7 @@
 const { pool } = require('../../config/database');
 const { ROLES, COMPLAINT_STATUS, ESCALATION_SLA } = require('../../config/constants');
 const { classifyComplaint } = require('../../services/ai.service');
+const notificationService = require('../../services/notification.service');
 
 /**
  * POST /complaints
@@ -44,6 +45,13 @@ const createComplaint = async (req, res, next) => {
         aiClassification: aiResult,
       },
     });
+
+    // Notify relevant authorities (Staff/MAINTENANCE)
+    const newComp = result.rows[0];
+    if (newComp.category === 'infrastructure') {
+       // Broadcast to maintenance staff
+       // (Simplified or specific target if we have maintenance ID)
+    }
   } catch (error) {
     next(error);
   }
@@ -92,11 +100,38 @@ const getComplaints = async (req, res, next) => {
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
+    // 🔥 AUTO-ESCALATION LOGIC: Check for missed deadlines before returning
+    const escalationResult = await pool.query(`
+      UPDATE complaints 
+      SET status = 'escalated', 
+          escalated_at = NOW(),
+          escalation_level = escalation_level + 1,
+          sla_deadline = NOW() + interval '24 hours' -- Give next level 24h
+      WHERE status IN ('open', 'in_progress') AND sla_deadline < NOW()
+      RETURNING *
+    `);
+
+    // Notify student of auto-escalation
+    for (const comp of escalationResult.rows) {
+      await notificationService.notifyComplaintUpdate(comp, 'SLA System');
+    }
+
     const query = `
       SELECT c.*,
         CASE WHEN c.is_anonymous THEN 'Anonymous' ELSE u.name END as submitted_by_name,
         d.name as department_name,
-        au.name as assigned_to_name
+        au.name as assigned_to_name,
+        CASE 
+          WHEN c.status = 'closed' THEN 'Completed'
+          WHEN c.status = 'resolved' THEN 'Waiting for User to Close'
+          WHEN c.status = 'escalated' THEN 'Super Admin / Institutional Head'
+          WHEN c.status = 'in_progress' AND c.assigned_to IS NOT NULL THEN 'Assigned to ' || au.name
+          ELSE 
+            CASE 
+              WHEN c.category = 'infrastructure' THEN 'Maintenance Department'
+              ELSE 'HOD (' || COALESCE(d.code, 'DEPT') || ')'
+            END
+        END as current_authority
       FROM complaints c
       JOIN users u ON c.submitted_by = u.id
       LEFT JOIN departments d ON c.department_id = d.id
@@ -136,10 +171,22 @@ const getComplaintById = async (req, res, next) => {
     const result = await pool.query(
       `SELECT c.*,
         CASE WHEN c.is_anonymous AND c.submitted_by != $2 THEN 'Anonymous' ELSE u.name END as submitted_by_name,
-        d.name as department_name
+        d.name as department_name,
+        CASE 
+          WHEN c.status = 'closed' THEN 'Completed'
+          WHEN c.status = 'resolved' THEN 'Waiting for User to Close'
+          WHEN c.status = 'escalated' THEN 'Super Admin / Institutional Head'
+          WHEN c.status = 'in_progress' AND c.assigned_to IS NOT NULL THEN 'Assigned to ' || au.name
+          ELSE 
+            CASE 
+              WHEN c.category = 'infrastructure' THEN 'Maintenance Department'
+              ELSE 'HOD (' || COALESCE(d.code, 'DEPT') || ')'
+            END
+        END as current_authority
        FROM complaints c
        JOIN users u ON c.submitted_by = u.id
        LEFT JOIN departments d ON c.department_id = d.id
+       LEFT JOIN users au ON c.assigned_to = au.id
        WHERE c.id = $1`,
       [id, req.user.id]
     );
@@ -220,10 +267,14 @@ const updateComplaintStatus = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Complaint not found.' });
     }
 
+    const updatedComp = result.rows[0];
+    // Universal notification (App + Email)
+    await notificationService.notifyComplaintUpdate(updatedComp, req.user.name);
+
     res.json({
       success: true,
       message: `Complaint status updated to ${status}.`,
-      data: result.rows[0],
+      data: updatedComp,
     });
   } catch (error) {
     next(error);

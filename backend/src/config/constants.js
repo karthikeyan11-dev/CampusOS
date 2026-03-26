@@ -42,8 +42,8 @@ const NOTIFICATION_TARGETS = {
   DEPARTMENT: 'department',
   BATCH: 'batch',
   CLASS: 'class',
-  HOSTELLERS: 'hostellers',
-  DAY_SCHOLARS: 'day_scholars',
+  HOSTELLER: 'hosteller',
+  DAY_SCHOLAR: 'day_scholar',
   FACULTY: 'faculty',
 };
 

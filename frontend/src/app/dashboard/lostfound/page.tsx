@@ -24,7 +24,16 @@ export default function LostFoundPage() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const res = await lostFoundAPI.getAll(filter ? { type: filter } : {});
+      const params: any = { limit: 50 };
+      
+      if (filter === 'resolved') {
+        params.status = 'resolved';
+      } else {
+        params.status = 'reported';
+        if (filter) params.type = filter;
+      }
+
+      const res = await lostFoundAPI.getAll(params);
       setItems(res.data.data || []);
     } catch (err) {
       console.error(err);
@@ -83,10 +92,10 @@ export default function LostFoundPage() {
       </div>
 
       {/* Filters */}
-      <div className="flex gap-2">
-        {['', 'lost', 'found'].map(t => (
+      <div className="flex flex-wrap gap-2">
+        {['', 'lost', 'found', 'resolved'].map(t => (
           <button key={t} onClick={() => setFilter(t)}
-            className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-widest transition-all ${filter === t ? 'gradient-bg text-white' : 'bg-cos-bg-card border border-cos-border text-cos-text-muted'}`}>
+            className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-widest transition-all ${filter === t ? 'gradient-bg text-white shadow-lg shadow-cos-primary/20' : 'bg-cos-bg-card border border-cos-border text-cos-text-muted hover:text-white'}`}>
             {t === '' ? 'All Items' : t}
           </button>
         ))}

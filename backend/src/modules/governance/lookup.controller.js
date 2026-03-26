@@ -5,7 +5,7 @@ const { pool } = require('../../config/database');
  */
 exports.lookupDepartments = async (req, res, next) => {
   try {
-    const result = await pool.query('SELECT id, name FROM departments ORDER BY name ASC');
+    const result = await pool.query('SELECT id, name, code FROM departments ORDER BY name ASC');
     res.json({ success: true, data: result.rows });
   } catch (error) {
     next(error);

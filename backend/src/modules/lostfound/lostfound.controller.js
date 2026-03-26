@@ -157,10 +157,11 @@ const resolveItem = async (req, res, next) => {
     const { id } = req.params;
     const { matchedItemId } = req.body;
 
+    const isAdmin = req.user.role === 'super_admin';
     const result = await pool.query(
       `UPDATE lost_found_items SET status = 'resolved', matched_item_id = $1, resolved_at = NOW()
-       WHERE id = $2 AND reported_by = $3 RETURNING *`,
-      [matchedItemId, id, req.user.id]
+       WHERE id = $2 ${isAdmin ? '' : 'AND reported_by = $3'} RETURNING *`,
+      isAdmin ? [matchedItemId, id] : [matchedItemId, id, req.user.id]
     );
 
     if (result.rows.length === 0) {
