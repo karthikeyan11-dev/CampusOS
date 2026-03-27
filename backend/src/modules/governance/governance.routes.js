@@ -5,9 +5,9 @@ const lookupController = require('./lookup.controller');
 const { authenticate } = require('../../middleware/auth.middleware');
 const { authorize } = require('../../middleware/rbac.middleware');
 
-// Public/Lighweight lookups (Authenticated only)
-router.get('/lookup/departments', authenticate, lookupController.lookupDepartments);
-router.get('/lookup/hostels', authenticate, lookupController.lookupHostels);
+// Public/Lighweight lookups
+router.get('/lookup/departments', lookupController.lookupDepartments);
+router.get('/lookup/hostels', lookupController.lookupHostels);
 
 // All routes below are Super Admin only for Institution Management
 router.use(authenticate, authorize('departments:manage'));

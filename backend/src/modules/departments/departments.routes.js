@@ -8,8 +8,8 @@ const redisService = require('../../services/redis.service');
 // Constants
 const DEPT_CACHE_TTL = 3600; // 60 minutes
 
-// GET /departments
-router.get('/', authenticate, async (req, res, next) => {
+// GET /departments (Public for registration)
+router.get('/', async (req, res, next) => {
   try {
     const data = await redisService.getOrSetCache(
       'departments:list',

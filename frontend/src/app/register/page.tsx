@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { authAPI, departmentAPI } from '@/lib/api';
-import { Zap, ArrowRight, Loader2, CheckCircle2, ChevronLeft, User, GraduationCap, Building2, Shield, Wrench } from 'lucide-react';
+import { Zap, ArrowRight, Loader2, CheckCircle2, ChevronLeft, User, GraduationCap, Building2, Shield, Wrench, Camera, Upload, Image as ImageIcon, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const roles = [
@@ -25,6 +25,8 @@ export default function RegisterPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
   const [departments, setDepartments] = useState<any[]>([]);
+  const [idCard, setIdCard] = useState<File | null>(null);
+  const [idPreview, setIdPreview] = useState<string>('');
 
   const [form, setForm] = useState({
     email: '', password: '', confirmPassword: '', name: '', phone: '',
@@ -53,26 +55,37 @@ export default function RegisterPage() {
     setError('');
 
     try {
-      const payload: any = {
-        email: form.email, password: form.password, name: form.name,
-        phone: form.phone, role: form.role, departmentId: form.departmentId || undefined,
-      };
-
-      if (form.role === 'student') {
-        payload.rollNumber = form.rollNumber;
-        payload.batch = form.batch;
-        payload.residenceType = form.residenceType;
-        payload.fatherName = form.fatherName;
-        payload.fatherPhone = form.fatherPhone;
-        payload.motherName = form.motherName;
-        payload.motherPhone = form.motherPhone;
-        payload.className = form.className;
-      } else if (['faculty', 'department_admin', 'warden', 'security_staff', 'maintenance_staff'].includes(form.role)) {
-        payload.facultyIdNumber = form.facultyIdNumber;
-        payload.designation = form.designation || form.role;
+      const formData = new FormData();
+      formData.append('email', form.email);
+      formData.append('password', form.password);
+      formData.append('name', form.name);
+      formData.append('phone', form.phone);
+      formData.append('role', form.role);
+      if (form.departmentId) formData.append('departmentId', form.departmentId);
+      
+      if (idCard) {
+        formData.append('idCard', idCard);
+      } else {
+        setError('Please upload your institutional ID card for verification.');
+        setLoading(false);
+        return;
       }
 
-      await authAPI.register(payload);
+      if (form.role === 'student') {
+        formData.append('rollNumber', form.rollNumber);
+        formData.append('batch', form.batch);
+        formData.append('residenceType', form.residenceType);
+        formData.append('fatherName', form.fatherName);
+        formData.append('fatherPhone', form.fatherPhone);
+        formData.append('motherName', form.motherName);
+        formData.append('motherPhone', form.motherPhone);
+        formData.append('className', form.className);
+      } else {
+        formData.append('facultyIdNumber', form.facultyIdNumber);
+        formData.append('designation', form.designation || form.role);
+      }
+
+      await authAPI.register(formData);
       setSuccess(true);
     } catch (err: any) {
       setError(err.response?.data?.message || 'Registration failed.');
@@ -237,8 +250,8 @@ export default function RegisterPage() {
                               <input className="input-field py-4 bg-white/5 border-white/5 font-medium" value={form.className} onChange={e => updateForm('className', e.target.value)} required placeholder="Ex: CSE-A, ECE-B" />
                            </div>
                            <div className="space-y-2">
-                              <label className="text-[10px] font-black uppercase tracking-widest text-cos-text-muted ml-1">Current Batch / Year</label>
-                              <input className="input-field py-4 bg-white/5 border-white/5 font-medium" value={form.batch} onChange={e => updateForm('batch', e.target.value)} placeholder="Ex: 2024 (1st Year)" />
+                              <label className="text-[10px] font-black uppercase tracking-widest text-cos-text-muted ml-1">Admission Batch</label>
+                              <input className="input-field py-4 bg-white/5 border-white/5 font-medium" value={form.batch} onChange={e => updateForm('batch', e.target.value)} required placeholder="Ex: 2024 (1st Year)" />
                            </div>
                            <div className="md:col-span-2 space-y-2">
                               <label className="text-[10px] font-black uppercase tracking-widest text-cos-text-muted ml-1">Residence Plan</label>
@@ -285,6 +298,59 @@ export default function RegisterPage() {
                            </div>
                         </div>
                       )}
+
+                      {/* 🛡️ Strict ID Verification Implementation */}
+                      <div className="border-t border-white/5 pt-8 space-y-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <h4 className="text-xs font-bold text-cos-primary uppercase tracking-widest flex items-center gap-2">
+                              <Shield className="w-3 h-3" /> Mandatory ID Verification
+                            </h4>
+                            <p className="text-[10px] text-cos-text-muted mt-0.5">Clear image of your Institutional ID Card is required</p>
+                          </div>
+                          {idCard && (
+                             <button type="button" onClick={() => { setIdCard(null); setIdPreview(''); }} className="text-cos-danger hover:opacity-80 transition-opacity">
+                               <X className="w-4 h-4" />
+                             </button>
+                          )}
+                        </div>
+
+                        {!idPreview ? (
+                          <label className="relative flex flex-col items-center justify-center gap-3 p-8 rounded-2xl border-2 border-dashed border-white/10 hover:border-cos-primary/30 hover:bg-white/5 transition-all cursor-pointer group">
+                            <div className="w-12 h-12 rounded-xl bg-cos-primary/10 flex items-center justify-center text-cos-primary group-hover:scale-110 transition-transform">
+                              <Upload className="w-6 h-6" />
+                            </div>
+                            <div className="text-center">
+                              <div className="text-xs font-black uppercase tracking-widest">Select ID Image</div>
+                              <div className="text-[10px] text-cos-text-muted mt-1 font-medium">JPEG, PNG up to 10MB</div>
+                            </div>
+                            <input 
+                              type="file" 
+                              className="hidden" 
+                              accept="image/*" 
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  setIdCard(file);
+                                  setIdPreview(URL.createObjectURL(file));
+                                }
+                              }} 
+                            />
+                          </label>
+                        ) : (
+                          <div className="relative rounded-2xl overflow-hidden border border-cos-primary/30 group">
+                             <img src={idPreview} alt="ID Preview" className="w-full h-48 object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
+                             <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent flex items-end p-4">
+                                <div className="flex items-center gap-2 text-white font-black text-[10px] uppercase tracking-widest">
+                                   <Camera className="w-4 h-4 text-cos-primary" /> Verification Snapshot Loaded
+                                </div>
+                             </div>
+                             <div className="absolute top-2 right-2 bg-cos-success text-white text-[8px] font-black uppercase px-2 py-1 rounded-full shadow-lg">
+                               Ready for AI Audit
+                             </div>
+                          </div>
+                        )}
+                      </div>
                       
                       <div className="flex justify-between pt-10">
                         <button type="button" onClick={() => setStep(2)} className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-cos-text-muted hover:text-white transition-colors">

@@ -86,29 +86,29 @@ const register = async (req, res, next) => {
 
     // Create role-specific record
     if (role === ROLES.STUDENT) {
-      // Step 2: Automated Relationship Mapping (The "Class-First" Logic)
-      // Lookup Mentor and Department/HOD based on class name
-      let mappedMentorId = null;
-      let mappedDeptId = departmentId;
+      // Step 2: Automated Relationship Mapping
+      let mappedClassId = classId || null;
+      let mappedMentorId = mentorId || null;
+      let mappedDeptId = departmentId || null;
 
       if (req.body.className) {
         const classRes = await pool.query(
-          `SELECT mentor_id, department_id FROM class_assignments WHERE class_name = $1`,
+          `SELECT c.id as class_id, c.mentor_id, c.department_id 
+           FROM classes c
+           WHERE c.name = $1`,
           [req.body.className]
         );
         if (classRes.rows.length > 0) {
+          mappedClassId = classRes.rows[0].class_id;
           mappedMentorId = classRes.rows[0].mentor_id;
           mappedDeptId = classRes.rows[0].department_id;
           
           // Update user's department if missing
-          const targetDeptResult = await pool.query('SELECT id FROM departments WHERE id = $1', [mappedDeptId]);
-          if (targetDeptResult.rows.length > 0) {
-              await pool.query('UPDATE users SET department_id = $1 WHERE id = $2', [mappedDeptId, user.id]);
-          }
+          await pool.query('UPDATE users SET department_id = $1 WHERE id = $2', [mappedDeptId, user.id]);
         }
       }
 
-      // TASK 8.4: Auto-map Warden from Hostel for consistency
+      // 🛡️ Warden Mapping (Mandatory for Hostellers)
       let assignedWarden = wardenId;
       if (hostelId) {
         const hRes = await pool.query('SELECT warden_id FROM hostels WHERE id = $1', [hostelId]);
@@ -119,8 +119,8 @@ const register = async (req, res, next) => {
         `INSERT INTO students (user_id, roll_number, class_id, batch, residence_type, hostel_block, room_number,
          father_name, father_phone, mother_name, mother_phone, warden_id, hostel_id, mentor_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
-        [user.id, rollNumber, classId, batch, residenceType || 'day_scholar', hostelBlock, roomNumber,
-         fatherName, fatherPhone, motherName, motherPhone, assignedWarden, hostelId, mappedMentorId || mentorId]
+        [user.id, rollNumber, mappedClassId, batch, residenceType || 'day_scholar', hostelBlock, roomNumber,
+         fatherName, fatherPhone, motherName, motherPhone, assignedWarden, hostelId, mappedMentorId]
       );
     } else if (role === ROLES.FACULTY || role === ROLES.DEPARTMENT_ADMIN || role === ROLES.WARDEN || role === ROLES.DEPUTY_WARDEN) {
       // Set initial faculty_type based on designation if provided
